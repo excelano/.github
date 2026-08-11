@@ -1,0 +1,64 @@
+name: rust-ci
+
+# The fleet's Rust CI policy, in one file. Repos call it rather than copying it:
+#
+#   jobs:
+#     ci:
+#       uses: excelano/.github/.github/workflows/rust-ci.yml@main
+#
+# The three checks are the ones lux and comma already ran before this file
+# existed, which is what made them the policy rather than a proposal. Clippy
+# denies warnings on purpose: a warning nobody has to fix is a warning nobody
+# fixes, and every Rust repo in the fleet was clean or nearly clean when the
+# check arrived.
+#
+# Without it, nothing compiled a test between a developer's laptop and a
+# release. cargo-dist builds the artifacts but runs no test, and a broken
+# commit could be tagged, published to crates.io, and promoted to apt behind a
+# green checkmark.
+#
+# See ~/notes/dry_boundary.md for why this lives here instead of in each repo.
+on:
+  workflow_call:
+    inputs:
+      toolchain:
+        description: >-
+          Rust toolchain to build and test against. Defaults to stable, which is
+          what every repo in the fleet wants unless it is pinned for a reason
+          worth writing down in the caller.
+        required: false
+        default: stable
+        type: string
+
+permissions:
+  contents: read
+
+# One in-flight run per branch; a newer push cancels the older run.
+concurrency:
+  group: rust-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Format, lint, and test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Rust
+        run: >-
+          rustup toolchain install ${{ inputs.toolchain }}
+          --profile minimal --component rustfmt,clippy
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Formatting
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Tests
+        run: cargo test
