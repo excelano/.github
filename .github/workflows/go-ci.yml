@@ -1,0 +1,61 @@
+name: go-ci
+
+# The fleet's Go CI policy, in one file. Repos call it rather than copying it:
+#
+#   jobs:
+#     ci:
+#       uses: excelano/.github/.github/workflows/go-ci.yml@main
+#
+# Without this check the test suite only ever ran on a developer's laptop.
+# CodeQL is static analysis and never compiles a test, and the release
+# workflow's only pre-build hook is `go mod tidy`. A commit that broke a test
+# could be tagged, released, and promoted to apt behind a green checkmark — and
+# Dependabot's weekly dependency bumps merged without anything having exercised
+# the code against the new versions.
+#
+# It lives here because eight repos needed the identical file, and eight copies
+# of one policy are eight chances to be wrong about it. See ~/notes/dry_boundary.md.
+on:
+  workflow_call:
+    inputs:
+      go-version:
+        description: >-
+          Go toolchain to test against. Defaults to the current stable release,
+          which is what every repo in the fleet wants unless it is pinned for a
+          reason worth writing down in the caller.
+        required: false
+        default: stable
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Vet and test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ inputs.go-version }}
+
+      # gofmt exits 0 whether or not it found anything, so the printed file
+      # list is the signal: any output at all means something is unformatted.
+      - name: Check formatting
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "These files need gofmt:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./...
