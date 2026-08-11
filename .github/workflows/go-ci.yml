@@ -26,6 +26,15 @@ on:
         required: false
         default: stable
         type: string
+      race:
+        description: >-
+          Run the tests under the race detector. Off by default because it
+          roughly doubles the run and proves nothing about a package with no
+          concurrency; worth turning on wherever goroutines are part of the
+          design.
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -58,4 +67,4 @@ jobs:
         run: go vet ./...
 
       - name: Test
-        run: go test ./...
+        run: go test ${{ inputs.race && '-race' || '' }} ./...

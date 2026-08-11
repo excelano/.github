@@ -22,6 +22,12 @@ name: go-lib-ci
 #   the module and CI follows.
 on:
   workflow_call:
+    inputs:
+      race:
+        description: Run the tests under the race detector. Forwarded to go-ci.
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -30,6 +36,8 @@ jobs:
   core:
     name: Core
     uses: excelano/.github/.github/workflows/go-ci.yml@main
+    with:
+      race: ${{ inputs.race }}
 
   floor:
     name: Declared minimum
@@ -47,4 +55,4 @@ jobs:
         run: go build ./...
 
       - name: Test
-        run: go test ./...
+        run: go test ${{ inputs.race && '-race' || '' }} ./...
