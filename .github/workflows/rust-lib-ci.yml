@@ -1,0 +1,67 @@
+name: rust-lib-ci
+
+# CI for a Rust crate that other code links against, rather than a binary
+# somebody installs:
+#
+#   jobs:
+#     ci:
+#       uses: excelano/.github/.github/workflows/rust-lib-ci.yml@main
+#
+# It is the binary policy plus the two things a library owes the people who
+# depend on it, and it calls rust-ci.yml rather than restating it so that a
+# correction to formatting, lints, or tests reaches binaries and libraries
+# alike.
+#
+# What a library adds:
+#
+#   Docs are a shipped artifact. A crate published to crates.io gets rendered
+#   on docs.rs, so a broken intra-doc link is a public defect that no test
+#   would ever fail on. rustdoc only reports it as a warning, hence -D warnings.
+#
+#   Packaging is the whole product. `cargo package` builds the .crate and then
+#   compiles it from the packaged sources, which catches a file excluded by a
+#   stray ignore rule or a path that only resolves in the working tree. For a
+#   binary that failure costs a re-run; for a library it is the entire release,
+#   and it would otherwise surface in publish-crate.yml after the tag was
+#   pushed — and a pushed tag is spent.
+on:
+  workflow_call:
+    inputs:
+      toolchain:
+        description: Rust toolchain to build and test against.
+        required: false
+        default: stable
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  core:
+    name: Core
+    uses: excelano/.github/.github/workflows/rust-ci.yml@main
+    with:
+      toolchain: ${{ inputs.toolchain }}
+
+  library:
+    name: Docs and packaging
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Rust
+        run: rustup toolchain install ${{ inputs.toolchain }} --profile minimal
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Documentation
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --no-deps --all-features
+
+      # No registry contact and no credentials: this builds the archive and
+      # compiles it, and stops short of uploading anything.
+      - name: Packaging
+        run: cargo package

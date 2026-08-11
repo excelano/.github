@@ -1,0 +1,50 @@
+name: go-lib-ci
+
+# CI for a Go module that other code imports, rather than a command somebody
+# installs:
+#
+#   jobs:
+#     ci:
+#       uses: excelano/.github/.github/workflows/go-lib-ci.yml@main
+#
+# It is the binary policy plus the one thing a library owes the people who
+# depend on it, and it calls go-ci.yml rather than restating it so that a
+# correction to formatting, vet, or tests reaches binaries and libraries alike.
+#
+# What a library adds:
+#
+#   The `go` directive in go.mod is a promise. It tells every consumer the
+#   oldest toolchain this module supports, and testing only against stable
+#   proves nothing about it — a language or standard-library feature added
+#   after that floor compiles fine on the runner and breaks the consumer who
+#   took the declaration at its word. The floor job reads the version from
+#   go.mod rather than naming one, so raising the promise is a one-line edit in
+#   the module and CI follows.
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  core:
+    name: Core
+    uses: excelano/.github/.github/workflows/go-ci.yml@main
+
+  floor:
+    name: Declared minimum
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up the Go version this module promises
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        run: go build ./...
+
+      - name: Test
+        run: go test ./...
