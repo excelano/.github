@@ -33,9 +33,15 @@ on:
 permissions:
   contents: read
 
-# One in-flight run per branch; a newer push cancels the older run.
+# One in-flight run per branch per toolchain; a newer push cancels the older
+# run. The toolchain belongs in the key because a caller may invoke this
+# workflow more than once in the same run — a stable job alongside a job pinned
+# to the declared MSRV — and a key without it puts both in one group, where
+# cancel-in-progress makes them cancel each other. The symptom is a green MSRV
+# job next to a cancelled stable one, which reads as a flake rather than a
+# collision.
 concurrency:
-  group: rust-ci-${{ github.ref }}
+  group: rust-ci-${{ github.ref }}-${{ inputs.toolchain }}
   cancel-in-progress: true
 
 jobs:
