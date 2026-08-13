@@ -1,0 +1,86 @@
+name: codeql
+
+# The fleet's CodeQL scan, in one file. Repos call it rather than copying it:
+#
+#   jobs:
+#     analyze:
+#       permissions:
+#         actions: read
+#         contents: read
+#         security-events: write
+#       uses: excelano/.github/.github/workflows/codeql.yml@main
+#
+# Seven repos held byte-identical copies of this scan while the CI workflow
+# sitting beside it in the same directory was already a three-line call. The
+# copies were what the security standard told people to make, so the standard
+# also had to document surviving them: pull the template's current state rather
+# than its first commit, because Dependabot had bumped the actions in the
+# template and nowhere else. Called instead of copied, an action bump lands once
+# and reaches every repo, and that instruction has nothing left to describe.
+# See ~/notes/dry_boundary.md and ~/notes/security_tooling.md.
+#
+# The caller keeps two things: when to run, and what to scan. Everything about
+# how to scan it is fleet policy and lives here.
+on:
+  workflow_call:
+    inputs:
+      language:
+        description: >-
+          CodeQL language to analyze. Every caller is Go today; the input exists
+          because the next one might not be, and because the analysis category
+          has to name the language for multi-language repos to report
+          separately. Must be a language CodeQL currently supports — that list
+          moves, and PHP has already left it.
+        required: false
+        default: go
+        type: string
+      go-version:
+        description: >-
+          Go toolchain for the build CodeQL analyzes. Ignored unless language is
+          go. Defaults to current stable, matching go-ci.
+        required: false
+        default: stable
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: Analyze
+    runs-on: ubuntu-latest
+
+    # Declared here as well as in the caller: a called workflow's permissions
+    # cannot exceed what the caller granted, so the caller's block is the one
+    # that decides. This one documents what the scan actually needs and fails
+    # visibly rather than silently dropping the upload if a caller forgets.
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # Autobuild compiles the module, so the toolchain has to be present and
+      # has to be the one the repo builds under. Skipped for languages CodeQL
+      # analyzes without a build.
+      - name: Set up Go
+        if: inputs.language == 'go'
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ inputs.go-version }}
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ inputs.language }}
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v4
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:${{ inputs.language }}"
