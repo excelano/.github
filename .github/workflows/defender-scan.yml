@@ -86,16 +86,20 @@ jobs:
 
           & $mp -SignatureUpdate | Out-String | Write-Host
 
-          $excl = (Get-MpPreference).ExclusionPath
-          if ($excl) {
-            Write-Host "Existing exclusions: $($excl -join ', ')"
-            foreach ($p in $excl) {
-              if ($env:GITHUB_WORKSPACE -like "$p*" -or $p -like "*$env:GITHUB_WORKSPACE*") {
-                Write-Host "Removing exclusion covering the workspace: $p"
-                Remove-MpPreference -ExclusionPath $p
-              }
-            }
+          # The hosted Windows image ships with C:\ and D:\ excluded, which is
+          # every disk on the runner. An on-demand scan under an exclusion
+          # returns 'found no threats' and looks exactly like a real clean
+          # result, so this is the difference between a scan and a placebo. The
+          # runner is ephemeral and single-tenant, so all exclusions go rather
+          # than only the ones covering the workspace: a scan target can move,
+          # and a partial strip would fail the same silent way.
+          $excl = @((Get-MpPreference).ExclusionPath)
+          if ($excl.Count -gt 0) {
+            Write-Host "Removing Defender exclusions: $($excl -join ', ')"
+            foreach ($p in $excl) { Remove-MpPreference -ExclusionPath $p }
           }
+          $left = @((Get-MpPreference).ExclusionPath)
+          if ($left.Count -gt 0) { throw "exclusions remain, the scan would be meaningless: $($left -join ', ')" }
 
           $s = Get-MpComputerStatus
           "SIGNATURE_VERSION=$($s.AntivirusSignatureVersion)" | Out-File $env:GITHUB_ENV -Append
