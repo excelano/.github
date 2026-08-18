@@ -1,0 +1,216 @@
+name: defender-scan
+
+# Scan a release's Windows artifacts with Microsoft Defender, on a Windows
+# runner, and report the detection name. Repos call it rather than copying it:
+#
+#   jobs:
+#     scan:
+#       uses: excelano/.github/.github/workflows/defender-scan.yml@main
+#       with:
+#         tag: ${{ github.event.release.tag_name }}
+#
+# This exists because of a specific dead end. winget validation flags our
+# unsigned binaries as Defender detections from time to time, and clearing a
+# false positive requires submitting it to Microsoft, and that submission form
+# requires a detection name we had no way to obtain. The name used to be
+# readable off the winget validation pipeline run; that route closed on
+# 2026-08-10, leaving the moderator as the only source and an unanswered
+# question as the only move. Producing the name ourselves at build time removes
+# the dependency: a flagged build is known before the manifest is ever
+# submitted, and the false-positive submission can go in while the release is
+# fresh. See ~/notes/build_release_gotchas.md.
+#
+# The caller keeps when to run and which tag to scan. How to scan is fleet
+# policy and lives here.
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: >-
+          Release tag whose assets to scan, e.g. v1.9.0. The assets are pulled
+          from the calling repository's release, not rebuilt, so what gets
+          scanned is the same bytes a user would download and the same bytes a
+          winget manifest pins by hash.
+        required: true
+        type: string
+      asset-pattern:
+        description: >-
+          Glob for which release assets to fetch. Defaults to the Windows
+          archives, which are the only ones Defender has an opinion about.
+        required: false
+        default: "*windows*"
+        type: string
+      fail-on-detection:
+        description: >-
+          Whether a detection fails the job. Defaults to false on purpose. A
+          detection here is far more often a false positive than a real finding,
+          and failing the release build on one would train everybody to ignore
+          the red X. The job always writes the detection to the summary either
+          way; this input is for callers that would rather stop the line.
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    name: Defender scan
+    runs-on: windows-latest
+
+    steps:
+      - name: Download the release's Windows assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          gh release download '${{ inputs.tag }}' `
+            --repo '${{ github.repository }}' `
+            --pattern '${{ inputs.asset-pattern }}' `
+            --dir artifacts
+          if ($LASTEXITCODE -ne 0) { throw "gh release download failed" }
+          Get-ChildItem artifacts | Format-Table Name, Length
+
+      # Two things make an on-demand scan quietly meaningless: stale signatures,
+      # and an exclusion covering the path being scanned. Both produce a clean
+      # result that looks identical to a real one, so both are checked out loud
+      # rather than assumed. The runner is administrator, so an exclusion over
+      # the workspace can simply be removed.
+      - name: Update signatures and confirm the scan can see the workspace
+        shell: pwsh
+        run: |
+          $mp = Join-Path $env:ProgramFiles 'Windows Defender\MpCmdRun.exe'
+          if (-not (Test-Path $mp)) { throw "MpCmdRun.exe not found; this image has no Defender" }
+
+          & $mp -SignatureUpdate | Out-String | Write-Host
+
+          $excl = (Get-MpPreference).ExclusionPath
+          if ($excl) {
+            Write-Host "Existing exclusions: $($excl -join ', ')"
+            foreach ($p in $excl) {
+              if ($env:GITHUB_WORKSPACE -like "$p*" -or $p -like "*$env:GITHUB_WORKSPACE*") {
+                Write-Host "Removing exclusion covering the workspace: $p"
+                Remove-MpPreference -ExclusionPath $p
+              }
+            }
+          }
+
+          $s = Get-MpComputerStatus
+          "SIGNATURE_VERSION=$($s.AntivirusSignatureVersion)" | Out-File $env:GITHUB_ENV -Append
+          "ENGINE_VERSION=$($s.AMEngineVersion)"             | Out-File $env:GITHUB_ENV -Append
+          Write-Host "Signature version: $($s.AntivirusSignatureVersion)"
+          Write-Host "Engine version:    $($s.AMEngineVersion)"
+          Write-Host "Real-time protection enabled: $($s.RealTimeProtectionEnabled)"
+
+      # winget runs two distinct checks and our flags have only ever landed on
+      # the second: '07. Installers Scan' is a static scan of the archive, and
+      # '08. Installation Validation' is dynamic testing after install. Every
+      # Defender flag so far passed 07 and failed 08, which puts the detection
+      # on the extracted executable rather than on the archive. So both are
+      # scanned here, and which one trips tells us which artifact a false
+      # positive submission has to name.
+      - name: Scan archives and extracted executables
+        id: scan
+        shell: pwsh
+        run: |
+          $mp = Join-Path $env:ProgramFiles 'Windows Defender\MpCmdRun.exe'
+          $targets = @()
+
+          foreach ($zip in Get-ChildItem artifacts -Filter *.zip) {
+            $targets += [pscustomobject]@{ Kind = 'archive'; Path = $zip.FullName }
+            $dest = Join-Path 'extracted' $zip.BaseName
+            New-Item -ItemType Directory -Force -Path $dest | Out-Null
+            try {
+              Expand-Archive -LiteralPath $zip.FullName -DestinationPath $dest -Force
+            } catch {
+              Write-Host "::warning::Could not expand $($zip.Name): $_"
+              continue
+            }
+            foreach ($exe in Get-ChildItem $dest -Recurse -Filter *.exe) {
+              $targets += [pscustomobject]@{ Kind = 'executable'; Path = $exe.FullName }
+            }
+          }
+
+          if ($targets.Count -eq 0) { throw "nothing to scan; check asset-pattern" }
+
+          $results = @()
+          foreach ($t in $targets) {
+            # Detections are read by diffing the threat-detection history around
+            # each scan. There is no supported way to clear that history, so a
+            # snapshot before and after is what attributes a detection to the
+            # file that caused it rather than to whatever ran earlier.
+            $before = @(Get-MpThreatDetection -ErrorAction SilentlyContinue | Select-Object -Expand DetectionID)
+
+            # -DisableRemediation matters. Without it Defender quarantines a
+            # flagged file mid-run, and every later step fails on a missing file
+            # instead of reporting the detection that removed it.
+            & $mp -Scan -ScanType 3 -File $t.Path -DisableRemediation | Out-String | Write-Host
+            $code = $LASTEXITCODE
+
+            $new = @(Get-MpThreatDetection -ErrorAction SilentlyContinue |
+                     Where-Object { $_.DetectionID -notin $before })
+
+            $names = @($new | ForEach-Object {
+              $id = $_.ThreatID
+              (Get-MpThreat -ErrorAction SilentlyContinue |
+                 Where-Object { $_.ThreatID -eq $id } |
+                 Select-Object -Expand ThreatName)
+            } | Where-Object { $_ } | Sort-Object -Unique)
+
+            $results += [pscustomobject]@{
+              Kind      = $t.Kind
+              Name      = Split-Path $t.Path -Leaf
+              ExitCode  = $code
+              Detected  = ($code -eq 2 -or $new.Count -gt 0)
+              Threats   = ($names -join ', ')
+              Present   = (Test-Path $t.Path)
+            }
+          }
+
+          $results | Format-Table -AutoSize | Out-String | Write-Host
+          $results | ConvertTo-Json -Depth 4 | Out-File scan-results.json -Encoding utf8
+
+          $hits = @($results | Where-Object { $_.Detected })
+
+          $md = @()
+          $md += "## Defender scan of ``${{ inputs.tag }}``"
+          $md += ""
+          $md += "Signature version ``$env:SIGNATURE_VERSION``, engine ``$env:ENGINE_VERSION``."
+          $md += ""
+          $md += "| Artifact | Kind | Result | Detection name |"
+          $md += "| --- | --- | --- | --- |"
+          foreach ($r in $results) {
+            $verdict = if ($r.Detected) { "**DETECTED**" } else { "clean" }
+            $threat  = if ($r.Threats) { "``$($r.Threats)``" } else { "-" }
+            $md += "| $($r.Name) | $($r.Kind) | $verdict | $threat |"
+          }
+          $md += ""
+          if ($hits.Count -gt 0) {
+            $md += "Submit these as false positives at https://www.microsoft.com/en-us/wdsi/filesubmission"
+            $md += "using the Software Developer path, quoting the detection name and signature version above."
+          } else {
+            $md += "Nothing detected. This is the signature version it was clean against, which is worth"
+            $md += "recording: a later flag on the same bytes is a signature change, not a build change."
+          }
+          $md -join "`n" | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+          "detected=$($hits.Count -gt 0)"                     | Out-File $env:GITHUB_OUTPUT -Append
+          "threat-names=$(($hits.Threats | Sort-Object -Unique) -join ', ')" | Out-File $env:GITHUB_OUTPUT -Append
+
+          foreach ($h in $hits) {
+            Write-Host "::warning title=Defender detection::$($h.Name) ($($h.Kind)): $($h.Threats)"
+          }
+
+          if ($hits.Count -gt 0 -and '${{ inputs.fail-on-detection }}' -eq 'true') {
+            throw "Defender flagged $($hits.Count) artifact(s)"
+          }
+
+      - name: Upload scan results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: defender-scan-${{ inputs.tag }}
+          path: scan-results.json
+          if-no-files-found: warn
