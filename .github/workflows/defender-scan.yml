@@ -36,9 +36,12 @@ on:
       asset-pattern:
         description: >-
           Glob for which release assets to fetch. Defaults to the Windows
-          archives, which are the only ones Defender has an opinion about.
+          archives, which are the only ones Defender has an opinion about. The
+          `.zip` is part of the default on purpose: cargo-dist repos publish a
+          `.zip.sha256` beside each archive, and a bare `*windows*` drags those
+          down for nothing.
         required: false
-        default: "*windows*"
+        default: "*windows*.zip"
         type: string
       fail-on-detection:
         description: >-
