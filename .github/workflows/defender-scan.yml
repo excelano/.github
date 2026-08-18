@@ -50,6 +50,18 @@ on:
         required: false
         default: false
         type: boolean
+      dynamic:
+        description: >-
+          Also run the dynamic pass: turn real-time protection and cloud
+          delivery on, then write and execute each binary and read whatever
+          Defender says about it. Off by default because it is slower, it
+          mutates the runner's security posture, and the static pass covers the
+          common case. Turn it on when a detection is known to be firing
+          somewhere else and the static pass cannot see it, which is the
+          situation that produced this job.
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -221,4 +233,199 @@ jobs:
         with:
           name: defender-scan-${{ inputs.tag }}
           path: scan-results.json
+          if-no-files-found: warn
+
+  # The static job above answers 'is there a signature match on this file'. It
+  # is not what winget's `08. Installation Validation` asks, and on 2026-08-18
+  # the difference was measured rather than assumed: every xfiles v1.9.0 binary
+  # scanned clean at signature 1.457.227.0, and xftp 1.9.0 resubmitted the same
+  # day on byte-identical bytes was flagged again inside the hour. A clean
+  # static scan says nothing about a detection that fires on execution.
+  #
+  # This job goes after that detection. It turns on the protections the hosted
+  # image ships disabled, then writes each binary to disk and runs it, which is
+  # the sequence winget performs. The point is the detection NAME: the Microsoft
+  # false-positive submission form will not accept a report without one, and
+  # since the validation pipeline stopped publishing it there is nowhere else to
+  # read it from.
+  dynamic:
+    name: Defender dynamic
+    if: ${{ inputs.dynamic }}
+    runs-on: windows-latest
+
+    steps:
+      - name: Download the release's Windows assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          New-Item -ItemType Directory -Force -Path staging | Out-Null
+          gh release download '${{ inputs.tag }}' `
+            --repo '${{ github.repository }}' `
+            --pattern '${{ inputs.asset-pattern }}' `
+            --dir staging
+          if ($LASTEXITCODE -ne 0) { throw "gh release download failed" }
+
+      # Extract before protection goes on. Real-time protection acting on the
+      # unpack is a detection too, but it would land on the archive and leave
+      # nothing on disk to execute, and the executable is the artifact a
+      # submission has to name.
+      - name: Expand archives
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path payload | Out-Null
+          foreach ($zip in Get-ChildItem staging -Filter *.zip) {
+            Expand-Archive -LiteralPath $zip.FullName -DestinationPath (Join-Path 'payload' $zip.BaseName) -Force
+          }
+          Get-ChildItem payload -Recurse -Filter *.exe | ForEach-Object { $_.FullName }
+
+      # The hosted image ships with real-time protection off, cloud delivery
+      # unset and both disks excluded. Every one of those turns this job into a
+      # no-op that reports success, so each is set explicitly and then read back
+      # — a Set-MpPreference that silently fails under tamper protection would
+      # otherwise be indistinguishable from a clean result.
+      - name: Arm Defender
+        shell: pwsh
+        run: |
+          $excl = @((Get-MpPreference).ExclusionPath | Where-Object { $_ })
+          foreach ($p in $excl) { Remove-MpPreference -ExclusionPath $p }
+
+          Set-MpPreference -DisableRealtimeMonitoring $false
+          Set-MpPreference -DisableBehaviorMonitoring $false
+          Set-MpPreference -DisableIOAVProtection $false
+          Set-MpPreference -DisableScriptScanning $false
+          Set-MpPreference -DisableBlockAtFirstSeen $false
+          # The July detection carried the !cl suffix, meaning cloud-delivered.
+          # Without MAPS reporting and sample consent that class cannot fire at
+          # all, so this is the setting the whole job depends on.
+          Set-MpPreference -MAPSReporting Advanced
+          Set-MpPreference -SubmitSamplesConsent SendAllSamples
+
+          & (Join-Path $env:ProgramFiles 'Windows Defender\MpCmdRun.exe') -SignatureUpdate | Out-String | Write-Host
+
+          $s = Get-MpComputerStatus
+          $p = Get-MpPreference
+          Write-Host "Real-time protection : $($s.RealTimeProtectionEnabled)"
+          Write-Host "Behaviour monitoring : $($s.BehaviorMonitorEnabled)"
+          Write-Host "Cloud (MAPS)         : $($p.MAPSReporting)"
+          Write-Host "Sample submission    : $($p.SubmitSamplesConsent)"
+          Write-Host "Signature version    : $($s.AntivirusSignatureVersion)"
+          "SIGNATURE_VERSION=$($s.AntivirusSignatureVersion)" | Out-File $env:GITHUB_ENV -Append
+
+          if (-not $s.RealTimeProtectionEnabled) {
+            throw "real-time protection did not come on; this job cannot answer the question it was run to answer"
+          }
+          $left = @((Get-MpPreference).ExclusionPath | Where-Object { $_ })
+          if ($left.Count -gt 0) { throw "exclusions remain: $($left -join ', ')" }
+
+      - name: Write and execute each binary under protection
+        id: run
+        shell: pwsh
+        run: |
+          # Detections are read from the Defender operational log rather than
+          # from Get-MpThreatDetection. Real-time blocks land there as event
+          # 1116 with the threat name attached, and the log carries a timestamp,
+          # so a detection can be tied to the binary that triggered it.
+          $t0 = Get-Date
+          New-Item -ItemType Directory -Force -Path live | Out-Null
+          $results = @()
+
+          foreach ($exe in Get-ChildItem payload -Recurse -Filter *.exe) {
+            $name = $exe.Name
+            $dest = Join-Path (Resolve-Path 'live') $name
+            $copied = $true
+            try {
+              # The copy is itself a test: with on-access protection armed, a
+              # flagged binary is often taken here, before anything runs.
+              Copy-Item $exe.FullName $dest -Force -ErrorAction Stop
+            } catch {
+              $copied = $false
+              Write-Host "::warning::Copy of $name was blocked: $_"
+            }
+
+            $ran = $false
+            if ($copied -and (Test-Path $dest)) {
+              try {
+                # --version over --help: it is the cheapest argument that exits
+                # on its own, and a CLI waiting on stdin would hang the job.
+                $proc = Start-Process -FilePath $dest -ArgumentList '--version' `
+                          -PassThru -NoNewWindow -RedirectStandardOutput "$dest.out" -RedirectStandardError "$dest.err"
+                $ran = $proc.WaitForExit(30000)
+                if (-not $ran) { $proc.Kill() }
+              } catch {
+                Write-Host "::warning::Execution of $name was blocked: $_"
+              }
+            }
+
+            Start-Sleep -Seconds 5
+            $results += [pscustomobject]@{
+              Name = $name; Copied = $copied; Ran = $ran; StillOnDisk = (Test-Path $dest)
+            }
+          }
+
+          $results | Format-Table -AutoSize | Out-String | Write-Host
+
+          $events = @()
+          try {
+            $events = Get-WinEvent -LogName 'Microsoft-Windows-Windows Defender/Operational' `
+                        -ErrorAction Stop |
+                      Where-Object { $_.TimeCreated -ge $t0 -and $_.Id -in 1006,1015,1116,1117 }
+          } catch {
+            Write-Host "No Defender operational events readable: $_"
+          }
+
+          $threats = @(Get-MpThreat -ErrorAction SilentlyContinue |
+                       Select-Object -Expand ThreatName -ErrorAction SilentlyContinue) +
+                     @($events | ForEach-Object {
+                        if ($_.Message -match '(?m)^Name:\s*(.+)$') { $Matches[1].Trim() }
+                      })
+          $threats = @($threats | Where-Object { $_ } | Sort-Object -Unique)
+
+          $md = @()
+          $md += "## Defender dynamic pass — ``${{ inputs.tag }}``"
+          $md += ""
+          $md += "Signature version ``$env:SIGNATURE_VERSION``, real-time protection on, cloud delivery Advanced."
+          $md += ""
+          $md += "| Binary | Copied | Ran | Still on disk |"
+          $md += "| --- | --- | --- | --- |"
+          foreach ($r in $results) { $md += "| $($r.Name) | $($r.Copied) | $($r.Ran) | $($r.StillOnDisk) |" }
+          $md += ""
+          if ($threats.Count -gt 0) {
+            $md += "### Detection names"
+            $md += ""
+            foreach ($t in $threats) { $md += "- ``$t``" }
+            $md += ""
+            $md += "Use these on the submission form at https://www.microsoft.com/en-us/wdsi/filesubmission"
+            $md += "together with the signature version above."
+          } else {
+            $md += "No detection fired. Real-time protection and cloud delivery were both confirmed on,"
+            $md += "so this is a real negative for these bytes at this signature version — not an unarmed scan."
+          }
+          if ($events.Count -gt 0) {
+            $md += ""
+            $md += "<details><summary>Defender operational events</summary>"
+            $md += ""
+            $md += '```'
+            foreach ($e in $events) { $md += "$($e.TimeCreated) [$($e.Id)]"; $md += $e.Message }
+            $md += '```'
+            $md += ""
+            $md += "</details>"
+          }
+          $md -join "`n" | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+          [pscustomobject]@{
+            SignatureVersion = $env:SIGNATURE_VERSION
+            Results = $results
+            ThreatNames = $threats
+            Events = @($events | ForEach-Object { @{ Time = "$($_.TimeCreated)"; Id = $_.Id; Message = $_.Message } })
+          } | ConvertTo-Json -Depth 6 | Out-File dynamic-results.json -Encoding utf8
+
+          foreach ($t in $threats) { Write-Host "::warning title=Detection name::$t" }
+
+      - name: Upload dynamic results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: defender-dynamic-${{ inputs.tag }}
+          path: dynamic-results.json
           if-no-files-found: warn
