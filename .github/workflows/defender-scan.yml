@@ -62,6 +62,17 @@ on:
         required: false
         default: false
         type: boolean
+      rollback-definitions:
+        description: >-
+          Before the dynamic pass, roll Defender's signatures back to the
+          baseline set shipped with the platform instead of updating to current.
+          For chasing a detection that fires somewhere with older definitions
+          than yours: if a heuristic was retired between their set and current,
+          a machine on current signatures cannot reproduce it and cannot name
+          it, and the name is what a false-positive submission requires.
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -301,7 +312,18 @@ jobs:
           Set-MpPreference -MAPSReporting Advanced
           Set-MpPreference -SubmitSamplesConsent SendAllSamples
 
-          & (Join-Path $env:ProgramFiles 'Windows Defender\MpCmdRun.exe') -SignatureUpdate | Out-String | Write-Host
+          $mp = Join-Path $env:ProgramFiles 'Windows Defender\MpCmdRun.exe'
+          if ('${{ inputs.rollback-definitions }}' -eq 'true') {
+            # -RemoveDefinitions -All drops back to the signature set built into
+            # the installed platform. Nothing re-updates afterwards, so the pass
+            # runs against that older set, and the version reported below says
+            # which one it was.
+            Write-Host "Rolling definitions back to the platform baseline"
+            & $mp -RemoveDefinitions -All | Out-String | Write-Host
+            Set-MpPreference -SignatureScheduleDay Never -ErrorAction SilentlyContinue
+          } else {
+            & $mp -SignatureUpdate | Out-String | Write-Host
+          }
 
           $s = Get-MpComputerStatus
           $p = Get-MpPreference
