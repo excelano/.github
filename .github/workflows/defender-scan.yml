@@ -93,13 +93,17 @@ jobs:
           # runner is ephemeral and single-tenant, so all exclusions go rather
           # than only the ones covering the workspace: a scan target can move,
           # and a partial strip would fail the same silent way.
-          $excl = @((Get-MpPreference).ExclusionPath)
+          # Get-MpPreference returns $null when nothing is excluded, and @($null)
+          # is a one-element array, so the empty case has to be filtered rather
+          # than counted or the assertion below fires on success.
+          $excl = @((Get-MpPreference).ExclusionPath | Where-Object { $_ })
           if ($excl.Count -gt 0) {
             Write-Host "Removing Defender exclusions: $($excl -join ', ')"
             foreach ($p in $excl) { Remove-MpPreference -ExclusionPath $p }
           }
-          $left = @((Get-MpPreference).ExclusionPath)
+          $left = @((Get-MpPreference).ExclusionPath | Where-Object { $_ })
           if ($left.Count -gt 0) { throw "exclusions remain, the scan would be meaningless: $($left -join ', ')" }
+          Write-Host "Defender exclusions: none"
 
           $s = Get-MpComputerStatus
           "SIGNATURE_VERSION=$($s.AntivirusSignatureVersion)" | Out-File $env:GITHUB_ENV -Append
