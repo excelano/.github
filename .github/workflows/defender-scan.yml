@@ -451,3 +451,211 @@ jobs:
           name: defender-dynamic-${{ inputs.tag }}
           path: dynamic-results.json
           if-no-files-found: warn
+
+  # The check that matters. Everything above scans or executes a file; this
+  # installs the package the way winget's `08. Installation Validation` does —
+  # nested-portable unpack into WinGet\Packages, a shim in WinGet\Links, then
+  # run it through the shim. On 2026-08-18 that sequence was the only local
+  # reproduction of step 08 available, and it had to be done by hand on a VM.
+  # This is that, without the VM.
+  #
+  # The manifests are synthesised rather than fetched. A local manifest install
+  # consults no source, so the identifier only has to be well formed and
+  # consistent across the three files — which means this needs no per-repo
+  # configuration and no token, and it works before a PR exists, which is the
+  # point of running it before submitting.
+  winget-install:
+    name: winget install validation
+    runs-on: windows-latest
+
+    steps:
+      - name: Download the release's Windows assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          gh release download '${{ inputs.tag }}' `
+            --repo '${{ github.repository }}' `
+            --pattern '${{ inputs.asset-pattern }}' `
+            --dir artifacts
+          if ($LASTEXITCODE -ne 0) { throw "gh release download failed" }
+
+      # The hosted image ships with the disks excluded from Defender, so
+      # everything below would pass under an exclusion and prove nothing.
+      - name: Arm Defender
+        shell: pwsh
+        run: |
+          $excl = @((Get-MpPreference).ExclusionPath | Where-Object { $_ })
+          foreach ($e in $excl) { Remove-MpPreference -ExclusionPath $e }
+          Set-MpPreference -DisableRealtimeMonitoring $false
+          Set-MpPreference -DisableBehaviorMonitoring $false
+          Set-MpPreference -DisableIOAVProtection $false
+          Set-MpPreference -DisableBlockAtFirstSeen $false
+          Set-MpPreference -MAPSReporting Advanced
+          Set-MpPreference -SubmitSamplesConsent SendAllSamples
+          & (Join-Path $env:ProgramFiles 'Windows Defender\MpCmdRun.exe') -SignatureUpdate | Out-String | Write-Host
+
+          $st = Get-MpComputerStatus
+          "SIGNATURE_VERSION=$($st.AntivirusSignatureVersion)" | Out-File $env:GITHUB_ENV -Append
+          Write-Host "Real-time protection: $($st.RealTimeProtectionEnabled)  signature: $($st.AntivirusSignatureVersion)"
+          if (-not $st.RealTimeProtectionEnabled) { throw "real-time protection did not come on" }
+          $left = @((Get-MpPreference).ExclusionPath | Where-Object { $_ })
+          if ($left.Count -gt 0) { throw "exclusions remain: $($left -join ', ')" }
+
+      # winget is absent from the Windows Server images. Installing it is three
+      # appx packages in dependency order and the runner already has the rights.
+      # A failure here stops the job rather than quietly skipping the only check
+      # that reproduces step 08.
+      - name: Ensure winget is available
+        shell: pwsh
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          if (Get-Command winget -ErrorAction SilentlyContinue) {
+            Write-Host "winget already present"
+          } else {
+            Write-Host "Installing App Installer and its dependencies"
+            Invoke-WebRequest -UseBasicParsing 'https://aka.ms/Microsoft.VCLibs.x64.14.00.Desktop.appx' -OutFile vclibs.appx
+            Invoke-WebRequest -UseBasicParsing 'https://github.com/microsoft/microsoft-ui-xaml/releases/download/v2.8.6/Microsoft.UI.Xaml.2.8.x64.appx' -OutFile xaml.appx
+            Invoke-WebRequest -UseBasicParsing 'https://aka.ms/getwinget' -OutFile winget.msixbundle
+            Add-AppxPackage vclibs.appx
+            Add-AppxPackage xaml.appx
+            Add-AppxPackage winget.msixbundle
+            "$env:LOCALAPPDATA\Microsoft\WindowsApps" | Out-File $env:GITHUB_PATH -Append
+            $env:PATH = "$env:LOCALAPPDATA\Microsoft\WindowsApps;$env:PATH"
+          }
+          winget --version
+          if ($LASTEXITCODE -ne 0) { throw "winget is not usable on this runner" }
+          winget settings --enable LocalManifestFiles
+
+      - name: Synthesise a manifest per archive and install it
+        shell: pwsh
+        run: |
+          $t0 = Get-Date
+          $version = '${{ inputs.tag }}' -replace '^v',''
+          $results = @()
+
+          foreach ($zip in Get-ChildItem artifacts -Filter *.zip) {
+            # RelativeFilePath has to match where the exe actually sits inside
+            # the archive, so it is read from the archive rather than assumed.
+            $peek = Join-Path 'peek' $zip.BaseName
+            New-Item -ItemType Directory -Force -Path $peek | Out-Null
+            Expand-Archive -LiteralPath $zip.FullName -DestinationPath $peek -Force
+            $exe = Get-ChildItem $peek -Recurse -Filter *.exe | Select-Object -First 1
+            if (-not $exe) { Write-Host "::warning::no exe in $($zip.Name), skipping"; continue }
+            $rel = $exe.FullName.Substring((Resolve-Path $peek).Path.Length + 1)
+
+            $name = $exe.BaseName
+            $id   = "Local.$name"
+            $hash = (Get-FileHash $zip.FullName -Algorithm SHA256).Hash
+            $url  = "https://github.com/${{ github.repository }}/releases/download/${{ inputs.tag }}/$($zip.Name)"
+            $dir  = Join-Path 'manifests' $name
+            New-Item -ItemType Directory -Force -Path $dir | Out-Null
+
+            # Built as string arrays rather than here-strings: a PowerShell
+            # here-string has to close at column zero, which cannot survive
+            # inside an indented YAML block.
+            $v = @(
+              "PackageIdentifier: $id"
+              "PackageVersion: $version"
+              "DefaultLocale: en-US"
+              "ManifestType: version"
+              "ManifestVersion: 1.6.0"
+            )
+            $l = @(
+              "PackageIdentifier: $id"
+              "PackageVersion: $version"
+              "PackageLocale: en-US"
+              "Publisher: Local"
+              "PackageName: $name"
+              "License: See repository"
+              "ShortDescription: Local install validation for Defender"
+              "ManifestType: defaultLocale"
+              "ManifestVersion: 1.6.0"
+            )
+            $i = @(
+              "PackageIdentifier: $id"
+              "PackageVersion: $version"
+              "InstallerType: zip"
+              "NestedInstallerType: portable"
+              "NestedInstallerFiles:"
+              "- RelativeFilePath: $rel"
+              "Installers:"
+              "- Architecture: x64"
+              "  InstallerUrl: $url"
+              "  InstallerSha256: $hash"
+              "ManifestType: installer"
+              "ManifestVersion: 1.6.0"
+            )
+            $v -join "`n" | Set-Content (Join-Path $dir "$id.yaml") -Encoding utf8
+            $l -join "`n" | Set-Content (Join-Path $dir "$id.locale.en-US.yaml") -Encoding utf8
+            $i -join "`n" | Set-Content (Join-Path $dir "$id.installer.yaml") -Encoding utf8
+
+            Write-Host "=== winget install --manifest ($($zip.Name)) ==="
+            winget install --manifest $dir --accept-package-agreements --accept-source-agreements --disable-interactivity
+            $code = $LASTEXITCODE
+
+            $shim = Join-Path "$env:LOCALAPPDATA\Microsoft\WinGet\Links" "$name.exe"
+            $ran = $false
+            if (Test-Path $shim) {
+              try { & $shim --version | Out-String | Write-Host; $ran = ($LASTEXITCODE -eq 0) }
+              catch { Write-Host "::warning::running $name through the shim was blocked: $_" }
+            }
+
+            $results += [pscustomobject]@{
+              Package = $name; InstallExit = $code; ShimPresent = (Test-Path $shim); RanViaShim = $ran
+            }
+          }
+
+          Start-Sleep -Seconds 10
+          $results | Format-Table -AutoSize | Out-String | Write-Host
+
+          $named = @(Get-MpThreat -ErrorAction SilentlyContinue | Select-Object -Expand ThreatName -ErrorAction SilentlyContinue)
+          $events = @()
+          try {
+            $events = Get-WinEvent -LogName 'Microsoft-Windows-Windows Defender/Operational' -ErrorAction Stop |
+                      Where-Object { $_.TimeCreated -ge $t0 -and $_.Id -in 1006,1015,1116,1117 }
+            $named += @($events | ForEach-Object { if ($_.Message -match '(?m)^Name:\s*(.+)$') { $Matches[1].Trim() } })
+          } catch { Write-Host "no Defender operational events readable" }
+          $named = @($named | Where-Object { $_ } | Sort-Object -Unique)
+
+          $failed = @($results | Where-Object { $_.InstallExit -ne 0 -or -not $_.RanViaShim })
+
+          $md = @()
+          $md += "## winget install validation"
+          $md += ""
+          $md += "Defender armed, signature ``$env:SIGNATURE_VERSION``. Installed through winget the way step 08 does."
+          $md += ""
+          $md += "| Package | winget exit | Shim created | Ran via shim |"
+          $md += "| --- | --- | --- | --- |"
+          foreach ($r in $results) { $md += "| $($r.Package) | $($r.InstallExit) | $($r.ShimPresent) | $($r.RanViaShim) |" }
+          $md += ""
+          if ($named.Count -gt 0) {
+            $md += "### Detection names"
+            foreach ($n in $named) { $md += "- ``$n``" }
+            $md += ""
+            $md += "Submit at https://www.microsoft.com/en-us/wdsi/filesubmission with the signature version above."
+          } elseif ($failed.Count -gt 0) {
+            $md += "**$($failed.Count) package(s) failed to install or run with no Defender detection recorded.** That is a packaging problem rather than a false positive."
+          } else {
+            $md += "All packages installed and ran clean. This reproduces winget's step 08 and is the strongest pre-submission signal available, though not a guarantee — the validation fleet has been observed running older definitions than a current runner."
+          }
+          $md -join "`n" | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+          [pscustomobject]@{ SignatureVersion = $env:SIGNATURE_VERSION; Results = $results; ThreatNames = $named } |
+            ConvertTo-Json -Depth 5 | Out-File winget-install-results.json -Encoding utf8
+
+          foreach ($n in $named)  { Write-Host "::warning title=Detection name::$n" }
+          foreach ($f in $failed) { Write-Host "::warning title=Install failed::$($f.Package) exit=$($f.InstallExit)" }
+
+          if ($named.Count -gt 0 -and '${{ inputs.fail-on-detection }}' -eq 'true') {
+            throw "Defender flagged $($named.Count) package(s) during winget install"
+          }
+
+      - name: Upload winget install results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: winget-install-${{ inputs.tag }}
+          path: winget-install-results.json
+          if-no-files-found: warn
