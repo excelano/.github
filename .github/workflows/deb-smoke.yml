@@ -19,11 +19,27 @@ name: deb-smoke
 # Author: David M. Anderson
 # Built with AI assistance (Claude, Anthropic)
 
+# Dispatchable as well as callable, and deliberately: this job only reads —
+# it downloads a release's packages and installs them on a runner that is
+# discarded afterwards, writing nothing anywhere. So it can be pointed at any
+# release that has already shipped, which is the only way to find out whether
+# the arm64 packages already in apt run, without cutting a release to ask.
 on:
   workflow_call:
     inputs:
       tag:
         description: 'The release whose packages to install'
+        required: true
+        type: string
+      commands:
+        description: 'The commands the packages install, space-separated. Defaults to the repository name.'
+        required: false
+        type: string
+        default: ''
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'The release whose packages to install (e.g. v1.2.3)'
         required: true
         type: string
       commands:
