@@ -1,0 +1,101 @@
+name: deb
+
+# Build the Debian packages for a release, prove they run, and attach them.
+#
+# One copy for the fleet. This was seven near-identical files — five of them
+# byte-identical, one differing in a help string and one in a `-p` flag — and
+# the smoke test below is the reason to collapse them: a check worth having on
+# one repo is worth having on all seven, and nobody adds it seven times.
+#
+# The caller decides when to run; this decides what to do. See the callers'
+# `deb.yml`, which is a few lines naming this file.
+#
+# On the trigger: cargo-dist creates the release with the default
+# GITHUB_TOKEN, and GitHub does not fire `release: published` for a release a
+# token created — a documented safeguard against workflow recursion. So in
+# practice the caller is dispatched by hand after a cargo-dist release:
+#
+#     gh workflow run deb.yml -f tag=v1.2.3
+#
+# Author: David M. Anderson
+# Built with AI assistance (Claude, Anthropic)
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: 'The tag to build packages for'
+        required: true
+        type: string
+      package:
+        description: 'The workspace package to build, where the repository is a workspace and only one of its members ships a binary'
+        required: false
+        type: string
+        default: ''
+      commands:
+        description: 'The commands the package installs, space-separated. Each is run after install as the smoke test. Defaults to the repository name.'
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.tag }}
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-deb
+        run: cargo install cargo-deb --locked
+
+      - name: Build the package
+        run: cargo deb ${{ inputs.package && format('-p {0}', inputs.package) || '' }}
+
+      # Each architecture is built on a runner of that architecture rather than
+      # cross-compiled, which is what makes this worth asserting: a package
+      # labelled arm64 carrying an x86-64 executable installs perfectly and
+      # then does not run. Borrowed from comma's, which has had it all along.
+      - name: The package is the architecture it claims
+        run: |
+          package=$(ls target/debian/*.deb)
+          test "$(dpkg-deb -f "$package" Architecture)" = "${{ matrix.arch }}"
+
+      # The step this workflow exists for. Until 2026-09-09 every arm64 package
+      # the fleet published was compiled here and shipped without anything
+      # running it once: this job built it and uploaded it, CI ran on amd64
+      # only, and no machine in the house is arm64 — the Pi is 32-bit and the
+      # Mac is Intel. The runner is real arm64 hardware and is thrown away
+      # afterwards, so asking it to install the package and run the command
+      # costs seconds and is the only execution the artefact will ever get.
+      #
+      # Install through apt rather than `dpkg -i`, so a missing dependency is
+      # resolved and reported rather than leaving a half-configured package.
+      - name: The package installs and the commands run
+        run: |
+          set -eux
+          package=$(ls target/debian/*.deb)
+          sudo apt-get update
+          sudo apt-get install -y "./${package#./}"
+          commands="${{ inputs.commands }}"
+          [ -n "$commands" ] || commands="${GITHUB_REPOSITORY#*/}"
+          for c in $commands; do
+              command -v "$c"
+              "$c" --version
+          done
+
+      - name: Upload to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ inputs.tag }}" target/debian/*.deb

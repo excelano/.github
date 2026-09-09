@@ -1,0 +1,67 @@
+name: deb-smoke
+
+# Install the arm64 packages a release published, and run what they installed.
+#
+# For the repositories whose packages are cross-compiled. goreleaser builds
+# every architecture on one amd64 runner, so nothing arm64 executes anywhere in
+# that release — the binary is written, packaged, signed for and shipped
+# without being run. This is the first arm64 machine the artefact ever meets,
+# and it meets it before anybody installs it from apt.
+#
+# The Rust repositories build each package on a runner of its own architecture
+# and smoke it in the same job; see `deb.yml` beside this file. They do not
+# need this one.
+#
+# It reads the packages off the release rather than rebuilding them, which is
+# what makes it a test of the artefact: the bytes it installs are the bytes a
+# person installs.
+#
+# Author: David M. Anderson
+# Built with AI assistance (Claude, Anthropic)
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: 'The release whose packages to install'
+        required: true
+        type: string
+      commands:
+        description: 'The commands the packages install, space-separated. Defaults to the repository name.'
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  arm64:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Take the arm64 packages off the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release download "${{ inputs.tag }}" --repo "$GITHUB_REPOSITORY" --pattern '*_arm64.deb'
+
+      # A repository that ships several commands ships several packages, and
+      # downloading none of them is not a failure `gh release download` reports
+      # in a way this job would otherwise notice. Counted rather than assumed.
+      - name: There is something to install
+        run: |
+          set -eu
+          count=$(ls -1 ./*_arm64.deb 2>/dev/null | wc -l)
+          echo "$count arm64 packages"
+          test "$count" -gt 0
+
+      - name: They install, and what they installed runs
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y ./*_arm64.deb
+          commands="${{ inputs.commands }}"
+          [ -n "$commands" ] || commands="${GITHUB_REPOSITORY#*/}"
+          for c in $commands; do
+              command -v "$c"
+              "$c" --version
+          done
