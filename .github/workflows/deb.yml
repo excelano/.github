@@ -32,6 +32,11 @@ on:
         required: false
         type: string
         default: ''
+      dry_run:
+        description: 'Build and check, attach nothing'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -100,7 +105,15 @@ jobs:
               "$c" --version
           done
 
+      # Without this the only way to find out whether any of the above works is
+      # to cut a release and watch. There is no --clobber below on purpose —
+      # a package already on a release is one somebody may have installed, and
+      # the spent-tag rule in ~/notes/releasing.md says what replacing it costs
+      # — so a dispatch against a shipped release would fail at the upload
+      # having proved everything before it. This skips that last step and lets
+      # the rest be exercised for free.
       - name: Upload to the release
+        if: ${{ !inputs.dry_run }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload "${{ inputs.tag }}" target/debian/*.deb
