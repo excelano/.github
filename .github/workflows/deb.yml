@@ -32,11 +32,6 @@ on:
         required: false
         type: string
         default: ''
-      commands:
-        description: 'The commands the package installs, space-separated. Each is run after install as the smoke test. Defaults to the repository name.'
-        required: false
-        type: string
-        default: ''
 
 permissions:
   contents: write
@@ -59,6 +54,18 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Install cargo-deb
         run: cargo install cargo-deb --locked
+
+      # What to run comes from the repo's release.conf, which is where that
+      # fact already lives and is read by ship and fleet too. Passing it as an
+      # input would have put it in the caller as well, and a value in two files
+      # is a value that disagrees with itself eventually.
+      - name: What the packages install
+        id: what
+        run: |
+          set -eu
+          commands=$(sed -n 's/^commands=//p' release.conf 2>/dev/null || true)
+          [ -n "$commands" ] || commands="${GITHUB_REPOSITORY#*/}"
+          echo "commands=$commands" >> "$GITHUB_OUTPUT"
 
       - name: Build the package
         run: cargo deb ${{ inputs.package && format('-p {0}', inputs.package) || '' }}
@@ -88,9 +95,7 @@ jobs:
           package=$(ls target/debian/*.deb)
           sudo apt-get update
           sudo apt-get install -y "./${package#./}"
-          commands="${{ inputs.commands }}"
-          [ -n "$commands" ] || commands="${GITHUB_REPOSITORY#*/}"
-          for c in $commands; do
+          for c in ${{ steps.what.outputs.commands }}; do
               command -v "$c"
               "$c" --version
           done

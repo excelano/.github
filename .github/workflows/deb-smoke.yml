@@ -31,22 +31,12 @@ on:
         description: 'The release whose packages to install'
         required: true
         type: string
-      commands:
-        description: 'The commands the packages install, space-separated. Defaults to the repository name.'
-        required: false
-        type: string
-        default: ''
   workflow_dispatch:
     inputs:
       tag:
         description: 'The release whose packages to install (e.g. v1.2.3)'
         required: true
         type: string
-      commands:
-        description: 'The commands the packages install, space-separated. Defaults to the repository name.'
-        required: false
-        type: string
-        default: ''
 
 permissions:
   contents: read
@@ -55,6 +45,27 @@ jobs:
   arm64:
     runs-on: ubuntu-24.04-arm
     steps:
+      # The default branch, not the tag. This checkout is here for
+      # release.conf alone — the packages come off the release — and the
+      # current profile is the one that is right about what this repo installs.
+      # Pinning it to the tag would read a profile that, for every release
+      # shipped before 2026-09-09, is not in the tree at all: the fallback
+      # would take over and run the repository name, which is not a command
+      # xfiles installs.
+      - uses: actions/checkout@v6
+
+      # What to run comes from the repo's release.conf, which is where that
+      # fact already lives and is read by ship and fleet too. Passing it as an
+      # input would have put it in the caller as well, and a value in two files
+      # is a value that disagrees with itself eventually.
+      - name: What the packages install
+        id: what
+        run: |
+          set -eu
+          commands=$(sed -n 's/^commands=//p' release.conf 2>/dev/null || true)
+          [ -n "$commands" ] || commands="${GITHUB_REPOSITORY#*/}"
+          echo "commands=$commands" >> "$GITHUB_OUTPUT"
+
       - name: Take the arm64 packages off the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -75,9 +86,7 @@ jobs:
           set -eux
           sudo apt-get update
           sudo apt-get install -y ./*_arm64.deb
-          commands="${{ inputs.commands }}"
-          [ -n "$commands" ] || commands="${GITHUB_REPOSITORY#*/}"
-          for c in $commands; do
+          for c in ${{ steps.what.outputs.commands }}; do
               command -v "$c"
               "$c" --version
           done
