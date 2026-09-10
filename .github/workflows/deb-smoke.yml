@@ -45,14 +45,23 @@ jobs:
   arm64:
     runs-on: ubuntu-24.04-arm
     steps:
-      # The default branch, not the tag. This checkout is here for
-      # ship.conf alone — the packages come off the release — and the
-      # current profile is the one that is right about what this repo installs.
-      # Pinning it to the tag would read a profile that, for every release
-      # shipped before 2026-09-09, is not in the tree at all: the fallback
-      # would take over and run the repository name, which is not a command
-      # xfiles installs.
+      # The default branch, and named rather than left to the default. This
+      # checkout is here for ship.conf alone — the packages come off the
+      # release — and the current profile is the one that is right about what
+      # this repo installs. The tag's tree is the wrong place to read it from:
+      # for every release shipped before 2026-09-09 the profile is not in it at
+      # all, so the fallback below would take over and run the repository name,
+      # which is not a command xfiles or blick-cli installs.
+      #
+      # A bare `actions/checkout` does NOT give the default branch here. It
+      # takes `github.ref`, and a called workflow inherits the caller's event —
+      # every caller of this file invokes it from a `release.yml` triggered by
+      # `push: tags`, so `github.ref` is the tag and a bare checkout was
+      # reading exactly the tree this comment says not to read. It was right
+      # about what it wanted and wrong about what it got.
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.repository.default_branch }}
 
       # What to run comes from the repo's ship.conf, which is where that fact
       # already lives and is read by ship and fleet too. Passing it as an input
@@ -65,8 +74,8 @@ jobs:
       # repository's name and would have failed here, paxc installs two and
       # only the first was checked, and the repositories it appeared to work
       # for were the ones whose command is named after the repository anyway.
-      # There is no release.conf to fall back to, because the checkout above is
-      # of the default branch rather than the tag.
+      # There is no release.conf to fall back to, because the checkout above
+      # names the default branch, where that file no longer exists.
       - name: What the packages install
         id: what
         run: |

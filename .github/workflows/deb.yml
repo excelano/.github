@@ -67,15 +67,22 @@ jobs:
       #
       # The file was called release.conf until it was renamed on 2026-09-09,
       # and this line went on reading the old name, so the fallback below took
-      # over everywhere. Both names are read because this job checks out the
-      # tag, and a tag older than the rename carries a tree with the old name
-      # in it.
+      # over everywhere.
+      #
+      # Only the new name is read. A second read of the old one was here
+      # briefly, on the reasoning that this job checks out the tag and a tag
+      # older than the rename would carry a tree with the old name in it. No
+      # tag of any caller does: `release.conf` was added to each of them after
+      # its newest tag, so the tag's tree has neither file and the fallback
+      # below is what actually answers for every tag that exists today. That
+      # is right for every caller but paxc, whose `commands=paxc paxr` first
+      # reaches a tagged tree at its next release; until then `paxr` goes
+      # untested, as it has all along.
       - name: What the packages install
         id: what
         run: |
           set -eu
           commands=$(sed -n 's/^commands=//p' ship.conf 2>/dev/null || true)
-          [ -n "$commands" ] || commands=$(sed -n 's/^commands=//p' release.conf 2>/dev/null || true)
           [ -n "$commands" ] || commands="${GITHUB_REPOSITORY#*/}"
           echo "commands=$commands" >> "$GITHUB_OUTPUT"
 
