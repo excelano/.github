@@ -46,7 +46,7 @@ jobs:
     runs-on: ubuntu-24.04-arm
     steps:
       # The default branch, not the tag. This checkout is here for
-      # release.conf alone — the packages come off the release — and the
+      # ship.conf alone — the packages come off the release — and the
       # current profile is the one that is right about what this repo installs.
       # Pinning it to the tag would read a profile that, for every release
       # shipped before 2026-09-09, is not in the tree at all: the fallback
@@ -54,15 +54,24 @@ jobs:
       # xfiles installs.
       - uses: actions/checkout@v6
 
-      # What to run comes from the repo's release.conf, which is where that
-      # fact already lives and is read by ship and fleet too. Passing it as an
-      # input would have put it in the caller as well, and a value in two files
-      # is a value that disagrees with itself eventually.
+      # What to run comes from the repo's ship.conf, which is where that fact
+      # already lives and is read by ship and fleet too. Passing it as an input
+      # would have put it in the caller as well, and a value in two files is a
+      # value that disagrees with itself eventually.
+      #
+      # The file was called release.conf until it was renamed on 2026-09-09,
+      # and this line went on reading the old name. So the fallback below took
+      # over everywhere: blick-cli and xfiles install no command by their
+      # repository's name and would have failed here, paxc installs two and
+      # only the first was checked, and the repositories it appeared to work
+      # for were the ones whose command is named after the repository anyway.
+      # There is no release.conf to fall back to, because the checkout above is
+      # of the default branch rather than the tag.
       - name: What the packages install
         id: what
         run: |
           set -eu
-          commands=$(sed -n 's/^commands=//p' release.conf 2>/dev/null || true)
+          commands=$(sed -n 's/^commands=//p' ship.conf 2>/dev/null || true)
           [ -n "$commands" ] || commands="${GITHUB_REPOSITORY#*/}"
           echo "commands=$commands" >> "$GITHUB_OUTPUT"
 

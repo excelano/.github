@@ -60,15 +60,22 @@ jobs:
       - name: Install cargo-deb
         run: cargo install cargo-deb --locked
 
-      # What to run comes from the repo's release.conf, which is where that
-      # fact already lives and is read by ship and fleet too. Passing it as an
-      # input would have put it in the caller as well, and a value in two files
-      # is a value that disagrees with itself eventually.
+      # What to run comes from the repo's ship.conf, which is where that fact
+      # already lives and is read by ship and fleet too. Passing it as an input
+      # would have put it in the caller as well, and a value in two files is a
+      # value that disagrees with itself eventually.
+      #
+      # The file was called release.conf until it was renamed on 2026-09-09,
+      # and this line went on reading the old name, so the fallback below took
+      # over everywhere. Both names are read because this job checks out the
+      # tag, and a tag older than the rename carries a tree with the old name
+      # in it.
       - name: What the packages install
         id: what
         run: |
           set -eu
-          commands=$(sed -n 's/^commands=//p' release.conf 2>/dev/null || true)
+          commands=$(sed -n 's/^commands=//p' ship.conf 2>/dev/null || true)
+          [ -n "$commands" ] || commands=$(sed -n 's/^commands=//p' release.conf 2>/dev/null || true)
           [ -n "$commands" ] || commands="${GITHUB_REPOSITORY#*/}"
           echo "commands=$commands" >> "$GITHUB_OUTPUT"
 
