@@ -1,0 +1,67 @@
+# Assemble the unsigned MSIX and attach it to a published release.
+#
+# Held here because it was the same thirty lines in five repositories and the
+# only thing that differed was odox passing -All. It is an action rather than a
+# reusable workflow because it is a step sequence inside a job that has already
+# built the release binary and run the Windows checks; a workflow would be a
+# second job and a second build.
+#
+# Author: David M. Anderson
+# Built with AI assistance (Claude, Anthropic)
+
+name: Store package
+description: Build the unsigned MSIX, keep it as an artifact, and attach it to a published release.
+
+inputs:
+  publisher:
+    description: >
+      Package/Identity/Publisher, the X.500 string Partner Center assigns per
+      account. The excelano organisation secret STORE_PUBLISHER. Without it a
+      release refuses and a push packages under a throwaway, so the packaging
+      is still proved on every commit.
+    required: false
+    default: ''
+  args:
+    description: Extra arguments for build-msix.ps1, such as -All where a repository packages more than one application.
+    required: false
+    default: ''
+  tag:
+    description: The release tag to attach the package to.
+    required: false
+    default: ''
+  token:
+    description: The token the upload uses, normally secrets.GITHUB_TOKEN.
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Package for the Store, unsigned
+      shell: pwsh
+      env:
+        STORE_PUBLISHER: ${{ inputs.publisher }}
+        MSIX_ARGS: ${{ inputs.args }}
+      run: |
+        if (-not $env:STORE_PUBLISHER) {
+          if ('${{ github.event_name }}' -eq 'release') {
+            throw 'a release package needs the real publisher: set the excelano organisation secret STORE_PUBLISHER to Partner Center''s Package/Identity/Publisher'
+          }
+          $env:STORE_PUBLISHER = 'CN=00000000-0000-0000-0000-000000000000'
+        }
+        $extra = if ($env:MSIX_ARGS) { $env:MSIX_ARGS.Split(' ', [StringSplitOptions]::RemoveEmptyEntries) } else { @() }
+        powershell -ExecutionPolicy Bypass -File packaging\windows\build-msix.ps1 @extra -OutDir dist
+        Get-ChildItem dist\*.msix | ForEach-Object { "$($_.Name) $([math]::Round($_.Length/1MB,1)) MB" }
+
+    - name: Keep the package
+      uses: actions/upload-artifact@v6
+      with:
+        name: msix
+        path: dist/*.msix
+
+    - name: Attach the package to the release
+      if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+      shell: pwsh
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+      run: gh release upload "${{ inputs.tag }}" (Get-ChildItem dist\*.msix).FullName
