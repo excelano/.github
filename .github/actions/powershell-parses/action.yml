@@ -1,0 +1,57 @@
+# Parse every PowerShell script under a directory and refuse one that will not.
+#
+# The packaging scripts are the only code in these repositories that nothing
+# else compiles or runs. `install.ps1` and `build-msix.ps1` are executed by
+# later steps and so are checked by being used, but `uninstall.ps1`'s error
+# paths, `shots.ps1` and anything added beside them are not, and a syntax error
+# in one waits until somebody needs it on the Windows machine. The Linux lane
+# cannot help: there is no PowerShell on it.
+#
+# Parsing is not running. It is the half a machine can do without a window, an
+# installed package or a registry, and it costs seconds.
+#
+# Author: David M. Anderson
+# Built with AI assistance (Claude, Anthropic)
+
+name: PowerShell parses
+description: Parse every .ps1 under a path and fail on one that will not, naming the file and the line.
+
+inputs:
+  path:
+    description: Directory to search, relative to the workspace.
+    required: false
+    default: packaging/windows
+
+runs:
+  using: composite
+  steps:
+    - name: Every PowerShell script parses
+      shell: pwsh
+      env:
+        PARSE_PATH: ${{ inputs.path }}
+      run: |
+        if (-not (Test-Path $env:PARSE_PATH)) {
+          throw "powershell-parses: no directory at $env:PARSE_PATH"
+        }
+        $scripts = @(Get-ChildItem $env:PARSE_PATH -Filter *.ps1 -Recurse)
+        if ($scripts.Count -eq 0) {
+          # A path that matches nothing is a path that was renamed, and a step
+          # that passes on nothing is a step that stopped checking without
+          # saying so.
+          throw "powershell-parses: no .ps1 under $env:PARSE_PATH"
+        }
+        $bad = 0
+        foreach ($file in $scripts) {
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+            $file.FullName, [ref]$null, [ref]$errors)
+          if ($errors) {
+            $bad++
+            foreach ($e in $errors) {
+              Write-Host "$($file.Name):$($e.Extent.StartLineNumber): $($e.Message)"
+            }
+          } else {
+            Write-Host "$($file.Name): parses"
+          }
+        }
+        if ($bad) { throw "$bad script(s) will not parse" }
