@@ -1,0 +1,53 @@
+# Run the Windows install scripts against the registry and read back.
+#
+# Held here because it was the same script in three repositories and absent
+# from three more, and because the version that was absent is the one that
+# would have caught a real defect: slipcase-desktop's uninstall reported
+# success while leaving `.slpc` pointing at a ProgID it had just deleted.
+# odox's copy names the deny rule in a comment and never plants one, so it
+# would have passed against exactly that.
+#
+# The script is the action's rather than the repository's on purpose: it says
+# in its own documentation that it is for a build agent or a machine where
+# losing an existing association does not matter, so unlike `check-imports.ps1`
+# — which `build-msix.ps1` calls and which must stay in the tree — nobody runs
+# this one by hand on the machine they use.
+#
+# Author: David M. Anderson
+# Built with AI assistance (Claude, Anthropic)
+
+name: Windows install check
+description: Install the Windows integration, take it away, and refuse if anything of ours is left behind or anything of anybody else's is not.
+
+inputs:
+  associations:
+    description: >
+      JSON array of { extension, progId, contentType, exe }, one per file type
+      install.ps1 registers. contentType may be omitted.
+    required: true
+  owns-extension:
+    description: >
+      true where the installer writes the extension's default value, which is
+      only right for a format that is this product's own. false for a shared
+      extension such as .toml or .odt, where the default is somebody else's to
+      hold and the check asserts it came back untouched.
+    required: false
+    default: 'false'
+  neighbour:
+    description: The ProgID planted to stand for another application's registration and choice.
+    required: false
+    default: 'SomeoneElse.Test.Reader'
+
+runs:
+  using: composite
+  steps:
+    - name: The integration goes on and comes off cleanly
+      shell: pwsh
+      env:
+        ASSOCIATIONS: ${{ inputs.associations }}
+        OWNS: ${{ inputs.owns-extension }}
+        NEIGHBOUR: ${{ inputs.neighbour }}
+      run: |
+        $args = @{ Associations = $env:ASSOCIATIONS; Neighbour = $env:NEIGHBOUR }
+        if ($env:OWNS -eq 'true') { $args.OwnsExtension = $true }
+        & "${{ github.action_path }}/check-install.ps1" @args
