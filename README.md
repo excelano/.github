@@ -31,6 +31,38 @@ Pinning `@main` rather than a tag is deliberate. A correction to the policy
 should reach every repo the next time it builds, which is the reason the file
 is here and not copied into each one.
 
+## Calling an action
+
+A reusable workflow is a whole job and brings its own runner. Where the shared
+thing is a handful of steps inside a job the caller already has — a job that has
+checked out, built, and installed something first — it is a composite action
+instead:
+
+```yaml
+      - name: The integration goes on and comes off cleanly
+        uses: excelano/.github/.github/actions/windows-install-check@main
+        with:
+          associations: '[{"extension": ".dclx", "progId": "Excelano.Segler.Archive"}]'
+```
+
+| Action | What it does |
+| --- | --- |
+| `windows-install-check` | Runs the Windows install scripts against the registry and reads back: what goes on comes off, a `UserChoice` naming this application goes with it, and another application's does not |
+| `store-package` | Builds the unsigned MSIX the Store takes, keeps it, and attaches it to the release when there is a tag |
+| `mac-release-binary` | Builds the universal binary at the floor the Info.plist declares, checks every slice is present, and attaches it for the Mac to sign |
+| `powershell-parses` | Parses every `.ps1` under a path and fails on one that will not, naming the file and the line |
+| `store-screenshots` | Raises the runner's desktop, runs `packaging/windows/shots.ps1`, and uploads what it wrote |
+
+Each of these was the same steps in three or more repos, or — which turned out
+to matter more — was in three and missing from three, and the version that was
+missing is the one that would have caught something. `windows-install-check`
+found the same class of defect in four uninstallers on the day it was shared.
+
+What stays in the caller is what genuinely differs. `store-screenshots` does not
+install an association, build a release or make a demo container, because which
+of those a repo needs is the repo's business; it starts at the point where there
+is something worth photographing.
+
 ## Why one host per org
 
 The anderix repos call `anderix/.github` instead of this repo, even for an
