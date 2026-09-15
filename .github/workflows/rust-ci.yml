@@ -57,8 +57,8 @@ jobs:
       # so a repo that carries one is red on every push until it is gone.
       - name: No release document
         run: |
-          if ls RELEASING.md RELEASE.md docs/RELEASING.md docs/RELEASE.md 2>/dev/null | grep .; then
-            echo "::error::this repo carries a release document; ship is the procedure. Delete it."
+          if ls RELEASING.md RELEASE.md docs/RELEASING.md docs/RELEASE.md CHANGELOG.md packaging/preflight.sh 2>/dev/null | grep .; then
+            echo "::error::a release document, changelog or preflight script; ship is the procedure. Delete it."
             exit 1
           fi
 
