@@ -49,8 +49,20 @@ runs:
           }
           $env:STORE_PUBLISHER = 'CN=00000000-0000-0000-0000-000000000000'
         }
-        $extra = if ($env:MSIX_ARGS) { $env:MSIX_ARGS.Split(' ', [StringSplitOptions]::RemoveEmptyEntries) } else { @() }
-        powershell -ExecutionPolicy Bypass -File packaging\windows\build-msix.ps1 @extra -OutDir dist
+        # Built as one array and invoked with the call operator. Splatting with
+        # @ is for cmdlets, not for a native command, and the argument went
+        # through as a stringified array: build-msix.ps1 refused for want of an
+        # application name and left no dist for the step after it.
+        $argv = @('-ExecutionPolicy', 'Bypass', '-File', 'packaging\windows\build-msix.ps1')
+        if ($env:MSIX_ARGS) {
+          $argv += $env:MSIX_ARGS.Split(' ', [StringSplitOptions]::RemoveEmptyEntries)
+        }
+        $argv += @('-OutDir', 'dist')
+        & powershell @argv
+        # `powershell -File` returns its exit code and nothing here read it, so
+        # a refusal reached the next step as a missing directory rather than as
+        # itself. The inline copies this replaced had the same gap.
+        if ($LASTEXITCODE -ne 0) { throw "build-msix.ps1 exited $LASTEXITCODE" }
         Get-ChildItem dist\*.msix | ForEach-Object { "$($_.Name) $([math]::Round($_.Length/1MB,1)) MB" }
 
     - name: Keep the package
