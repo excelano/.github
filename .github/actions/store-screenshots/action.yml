@@ -1,0 +1,112 @@
+# Take a repository's store screenshots on a hosted Windows runner and keep them.
+#
+# `packaging/windows/shots.ps1` is the repository's and says which documents and
+# which frames; everything around it is the same everywhere, which is what is
+# here: making the desktop big enough, running the set, and uploading it.
+#
+# What is *not* here is getting the application into a state where it can be
+# photographed — `install.ps1` for an association, a release build, a demo
+# container, an installed package. That differs by repository and belongs in
+# the workflow, in the step before this one.
+#
+# The frames are of the release build of the commit rather than of the Store
+# package, because a Store package cannot be launched off the Store. macOS has
+# the same gap for the same reason, and the commit is what makes them the same
+# application.
+#
+# Author: David M. Anderson
+# Built with AI assistance (Claude, Anthropic)
+
+name: Store screenshots
+description: Raise the runner's desktop, run packaging/windows/shots.ps1, and upload what it wrote.
+
+inputs:
+  mode:
+    description: >
+      `reference` takes one plain frame, which is what a coordinate gets
+      measured off. `full` takes the set.
+    required: true
+  args:
+    description: Further arguments for shots.ps1, such as -SideLoaded.
+    required: false
+    default: ''
+  out:
+    description: Where shots.ps1 writes, relative to the workspace.
+    required: false
+    default: dist/screenshots
+  width:
+    description: The window width shots.ps1 asks for, which sets how big the desktop has to be.
+    required: false
+    default: '1366'
+  height:
+    description: The window height shots.ps1 asks for.
+    required: false
+    default: '768'
+  name:
+    description: The artifact name.
+    required: false
+    default: store-screenshots
+
+runs:
+  using: composite
+  steps:
+    - name: The desktop is big enough to photograph a window on
+      shell: pwsh
+      env:
+        WANT_W: ${{ inputs.width }}
+        WANT_H: ${{ inputs.height }}
+      run: |
+        Add-Type -AssemblyName System.Windows.Forms
+        function Screen { [System.Windows.Forms.SystemInformation]::VirtualScreen }
+        Write-Host "as found: $((Screen).Width)x$((Screen).Height)"
+        # A hosted runner starts at 1024x768, which cannot hold a 1366x768
+        # window placed at 200,100. Whether this cmdlet is on the image was the
+        # question this step first existed to answer; it is, and it is still
+        # tried and reported rather than assumed, because an image changes.
+        if (Get-Command Set-DisplayResolution -ErrorAction SilentlyContinue) {
+          Set-DisplayResolution -Width 1920 -Height 1080 -Force
+          Start-Sleep -Seconds 2
+          Write-Host "after Set-DisplayResolution: $((Screen).Width)x$((Screen).Height)"
+        } else {
+          Write-Host 'no Set-DisplayResolution on this image'
+        }
+        # screenshot.ps1 puts the window at 200,100, so that plus the frame is
+        # what the desktop has to hold. A smaller one clips the window, the
+        # driver reads a frame under the size it asked for, and it refuses -
+        # which is correct and says nothing about why.
+        $needW = [int]$env:WANT_W + 200
+        $needH = [int]$env:WANT_H + 100
+        if ((Screen).Width -lt $needW -or (Screen).Height -lt $needH) {
+          throw "the desktop is $((Screen).Width)x$((Screen).Height) and a $($env:WANT_W)x$($env:WANT_H) window at 200,100 needs ${needW}x${needH}"
+        }
+
+    - name: The Store screenshots
+      shell: pwsh
+      env:
+        SHOT_MODE: ${{ inputs.mode }}
+        SHOT_ARGS: ${{ inputs.args }}
+      run: |
+        if ($env:SHOT_MODE -notin @('reference', 'full')) {
+          throw "store-screenshots: mode is reference or full, not '$($env:SHOT_MODE)'"
+        }
+        # Built as an array and passed to `&`, not interpolated into a command
+        # line. `powershell -File` with a splatted hashtable stringifies it and
+        # the receiving script sees one argument, which is how an -All once
+        # reached a build script as the literal text of a hashtable.
+        $argv = @('-ExecutionPolicy', 'Bypass', '-File', 'packaging\windows\shots.ps1')
+        if ($env:SHOT_MODE -eq 'reference') { $argv += '-Reference' }
+        if ($env:SHOT_ARGS) {
+          $argv += $env:SHOT_ARGS.Split(' ', [StringSplitOptions]::RemoveEmptyEntries)
+        }
+        & powershell @argv
+        # `powershell -File` returns its exit code and nothing read it once, so
+        # a refusal reached the next step as a missing directory rather than as
+        # itself.
+        if ($LASTEXITCODE -ne 0) { throw "shots.ps1 exited $LASTEXITCODE" }
+
+    - name: Keep them
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{ inputs.name }}
+        path: ${{ inputs.out }}/*.png
+        if-no-files-found: error
