@@ -52,6 +52,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      # Releases are cut by ship. A release document beside it is what a
+      # session on another machine follows instead, and what drifts from it,
+      # so a repo that carries one is red on every push until it is gone.
+      - name: No release document
+        run: |
+          if ls RELEASING.md RELEASE.md docs/RELEASING.md docs/RELEASE.md 2>/dev/null | grep .; then
+            echo "::error::this repo carries a release document; ship is the procedure. Delete it."
+            exit 1
+          fi
+
       - name: Install Rust
         run: >-
           rustup toolchain install ${{ inputs.toolchain }}
