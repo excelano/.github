@@ -71,8 +71,13 @@ runs:
         name: msix
         path: dist/*.msix
 
+    # A dispatch may be asking for something other than a package - a caller
+    # with an optional screenshots run has no tag to give - so an empty tag
+    # means the package is built and kept as an artefact and nothing is
+    # attached. Without this the run reaches `gh release upload ""` and fails
+    # for a reason that has nothing to do with what was asked for.
     - name: Attach the package to the release
-      if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+      if: inputs.tag != '' && (github.event_name == 'release' || github.event_name == 'workflow_dispatch')
       shell: pwsh
       env:
         GH_TOKEN: ${{ inputs.token }}
