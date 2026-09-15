@@ -51,7 +51,8 @@
 param(
     [Parameter(Mandatory = $true)] [string] $Associations,
     [switch] $OwnsExtension,
-    [string] $Neighbour = 'SomeoneElse.Test.Reader'
+    [string] $Neighbour = 'SomeoneElse.Test.Reader',
+    [string] $InstallArgs = '-NoBinary'
 )
 
 Set-StrictMode -Version Latest
@@ -127,8 +128,12 @@ foreach ($app in $apps) {
 }
 
 try {
-    Write-Host 'check-install: install.ps1 -NoBinary'
-    & powershell -ExecutionPolicy Bypass -File $install -NoBinary | Out-Null
+    Write-Host "check-install: install.ps1 $InstallArgs"
+    # Split rather than splatted: splatting an array binds its elements
+    # positionally, so @('-NoBinary') would bind the literal string to the
+    # first positional parameter and leave the switch false. odox found that.
+    $installArgv = $InstallArgs.Split(' ', [StringSplitOptions]::RemoveEmptyEntries)
+    & powershell -ExecutionPolicy Bypass -File $install @installArgv | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "install.ps1 exited $LASTEXITCODE" }
 
     foreach ($app in $apps) {

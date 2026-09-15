@@ -37,6 +37,13 @@ inputs:
     description: The ProgID planted to stand for another application's registration and choice.
     required: false
     default: 'SomeoneElse.Test.Reader'
+  install-args:
+    description: >
+      Arguments for install.ps1. -NoBinary covers the registry, which is all
+      this asks about. flyleaf adds -Default, because taking the extension's
+      default value is a switch there rather than the only behaviour.
+    required: false
+    default: '-NoBinary'
 
 runs:
   using: composite
@@ -47,7 +54,12 @@ runs:
         ASSOCIATIONS: ${{ inputs.associations }}
         OWNS: ${{ inputs.owns-extension }}
         NEIGHBOUR: ${{ inputs.neighbour }}
+        INSTALL_ARGS: ${{ inputs.install-args }}
       run: |
-        $args = @{ Associations = $env:ASSOCIATIONS; Neighbour = $env:NEIGHBOUR }
-        if ($env:OWNS -eq 'true') { $args.OwnsExtension = $true }
-        & "${{ github.action_path }}/check-install.ps1" @args
+        $params = @{
+          Associations = $env:ASSOCIATIONS
+          Neighbour    = $env:NEIGHBOUR
+          InstallArgs  = $env:INSTALL_ARGS
+        }
+        if ($env:OWNS -eq 'true') { $params.OwnsExtension = $true }
+        & "${{ github.action_path }}/check-install.ps1" @params
