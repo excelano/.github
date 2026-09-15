@@ -1,0 +1,104 @@
+# Build the executable the Mac App Store package is made from, and attach it to
+# the release.
+#
+# It signs nothing and holds no credential. The Apple Distribution certificate's
+# private key is the one thing in this lane that a leak would really cost, so it
+# stays on the Mac; what does not need it is the build, and that is the slow
+# half. The Mac then downloads this one file and runs
+# `build-app.sh --binary <it> --store <profile>`, with no toolchain and nothing
+# compiled.
+#
+# Two checks that each cost a review cycle run here rather than on the Mac: that
+# every architecture asked for is present, and the private-symbol scan that
+# caught `_CGSSetWindowBackgroundBlurRadius` in slipcase-desktop 0.1.1. Both are
+# `build-app.sh`'s; this only arranges for them to run before anybody is waiting.
+#
+# The deployment target is read from `packaging/macos/Info.plist.in` rather than
+# passed in, because the bundle already declares it and the two disagreeing is
+# the defect `build-app.sh` refuses on. It is 11.0, 12.0 and 13.4 across the
+# fleet, so there is no default worth having.
+#
+# Author: David M. Anderson
+# Built with AI assistance (Claude, Anthropic)
+
+name: Mac release binary
+description: Build the release executable for the Mac App Store package and attach it to the release.
+
+inputs:
+  binary:
+    description: The executable's name, as it appears in Contents/MacOS.
+    required: true
+  package:
+    description: The cargo package to build, for a workspace. Empty builds the default.
+    required: false
+    default: ''
+  targets:
+    description: >
+      Rust targets to build, space separated. More than one is joined with lipo
+      into a universal binary. One is taken as it is, which is duckling's case:
+      ONNX Runtime has no x86_64-apple-darwin build, so there is no second slice
+      to join.
+    required: false
+    default: 'x86_64-apple-darwin aarch64-apple-darwin'
+  tag:
+    description: The release tag to attach to.
+    required: false
+    default: ''
+  token:
+    description: The token the upload uses, normally secrets.GITHUB_TOKEN.
+    required: false
+    default: ''
+
+outputs:
+  asset:
+    description: The file that was attached.
+    value: ${{ steps.build.outputs.asset }}
+
+runs:
+  using: composite
+  steps:
+    - name: The release binary, and the checks a rejection would have taught
+      id: build
+      shell: bash
+      env:
+        BINARY: ${{ inputs.binary }}
+        PACKAGE: ${{ inputs.package }}
+        TARGETS: ${{ inputs.targets }}
+      run: |
+        set -eux
+        floor=$(plutil -extract LSMinimumSystemVersion raw packaging/macos/Info.plist.in)
+        pkg=""
+        [ -z "$PACKAGE" ] || pkg="-p $PACKAGE"
+
+        # shellcheck disable=SC2086
+        for triple in $TARGETS; do
+          rustup target add "$triple"
+          MACOSX_DEPLOYMENT_TARGET="$floor" \
+            cargo build --release $pkg --target "$triple"
+        done
+
+        target=$(cargo metadata --format-version 1 --no-deps |
+          sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')
+
+        # `build-app.sh` is what joins, checks both slices and scans the
+        # symbols. Neither --sign nor --store, so nothing here holds a
+        # credential and nothing is signed.
+        count=$(printf '%s\n' $TARGETS | grep -c .)
+        if [ "$count" -gt 1 ]; then
+          ./packaging/macos/build-app.sh --universal
+          asset="${BINARY}-universal"
+          cp "${target}/release/${BINARY}-universal" "$asset"
+        else
+          triple=$TARGETS
+          ./packaging/macos/build-app.sh --binary "${target}/${triple}/release/${BINARY}"
+          asset="${BINARY}-${triple}"
+          cp "${target}/${triple}/release/${BINARY}" "$asset"
+        fi
+        lipo -info "$asset"
+        echo "asset=${asset}" >> "$GITHUB_OUTPUT"
+
+    - name: Attach it to the release
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+      run: gh release upload "${{ inputs.tag }}" "${{ steps.build.outputs.asset }}" --clobber
