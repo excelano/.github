@@ -94,29 +94,52 @@ runs:
         WANT_H: ${{ inputs.height }}
       run: |
         set -eu
+        # `screenshot.sh` puts the window at 100,80, so that plus the frame is
+        # what the desktop has to hold.
         need_w=$((WANT_W + 100))
         need_h=$((WANT_H + 80))
+
+        # `displayplacer` is not on the image and comes from Homebrew, which
+        # is. It reads the display as well as setting it: `system_profiler`
+        # reported no resolution at all for this runner's display, which then
+        # crashed the check that was reading it.
+        brew list displayplacer >/dev/null 2>&1 || brew install displayplacer
+        displayplacer list > /tmp/displays.txt || true
+        # Printed whole. What modes a hosted runner's display offers is the
+        # question this step exists to answer, and an image changes.
+        cat /tmp/displays.txt
+
         size() {
-          system_profiler SPDisplaysDataType |
-            sed -n 's/.*Resolution: \([0-9]*\) x \([0-9]*\).*/\1 \2/p' | head -1
+          displayplacer list 2>/dev/null |
+            sed -n 's/^Resolution: \([0-9][0-9]*\)x\([0-9][0-9]*\).*/\1 \2/p' | head -1
         }
         echo "as found: $(size)"
-        brew list displayplacer >/dev/null 2>&1 || brew install displayplacer
-        id=$(displayplacer list | sed -n 's/^Persistent screen id: //p' | head -1)
-        mode=$(displayplacer list |
-          sed -n 's/^  mode \([0-9]*\): res:\([0-9]*\)x\([0-9]*\) .*/\1 \2 \3/p' |
+
+        id=$(sed -n 's/^Persistent screen id: //p' /tmp/displays.txt | head -1)
+        # The smallest mode that holds the window, so the frame is the window
+        # and not a window in a field of desktop.
+        mode=$(sed -n 's/^  mode \([0-9][0-9]*\): res:\([0-9][0-9]*\)x\([0-9][0-9]*\).*/\1 \2 \3/p' /tmp/displays.txt |
           awk -v w="$need_w" -v h="$need_h" '$2 >= w && $3 >= h { print $2 * $3, $1 }' |
           sort -n | head -1 | cut -d' ' -f2)
-        if [ -n "$mode" ]; then
+        if [ -n "${id}" ] && [ -n "${mode}" ]; then
           displayplacer "id:${id} mode:${mode}"
           sleep 2
           echo "after displayplacer: $(size)"
         else
           echo "no mode on this display is at least ${need_w}x${need_h}"
         fi
-        set -- $(size)
-        if [ "${1:-0}" -lt "$need_w" ] || [ "${2:-0}" -lt "$need_h" ]; then
-          echo "::error::mac-store-screenshots: the desktop is ${1}x${2} and a ${WANT_W}x${WANT_H} window at 100,80 needs ${need_w}x${need_h}"
+
+        got=$(size)
+        if [ -z "${got}" ]; then
+          echo "::error::mac-store-screenshots: the display would not say what size it is; the list above is what it said"
+          exit 1
+        fi
+        # Split without set -u tripping over an empty read: `got` is two words
+        # or the check above has already stopped.
+        w=${got%% *}
+        h=${got##* }
+        if [ "$w" -lt "$need_w" ] || [ "$h" -lt "$need_h" ]; then
+          echo "::error::mac-store-screenshots: the desktop is ${w}x${h} and a ${WANT_W}x${WANT_H} window at 100,80 needs ${need_w}x${need_h}"
           exit 1
         fi
 
