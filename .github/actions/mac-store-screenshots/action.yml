@@ -1,0 +1,116 @@
+# Take a repository's Mac App Store screenshots on a hosted Apple silicon
+# runner and keep them.
+#
+# `packaging/macos/shots.sh` is the repository's and says which document and
+# which frames; everything around it is the same everywhere, which is what is
+# here: running the set once per language and uploading it.
+#
+# What is *not* here is building the bundle to photograph. That differs by
+# repository — the target directory, the binary's name, what has to be
+# registered with Launch Services first — and belongs in the workflow, in the
+# step before this one.
+#
+# The frames are of a bundle built from the commit rather than of the Store
+# package, because a Store package cannot be launched off the Store: the kernel
+# refuses it. Windows has the same gap for the same reason, and the commit is
+# what makes them the same application.
+#
+# ACCESSIBILITY
+#
+# Sizing and fronting another application's window goes through System Events,
+# and clicking and typing go through CGEventPost. Both are gated by TCC
+# Accessibility. A hosted runner is trusted for both — measured on Segler's
+# workflow rather than assumed, because a refused click is dropped silently and
+# the capture then succeeds, so the failure would be a correctly sized
+# photograph of the wrong thing.
+#
+# ONE SET PER LANGUAGE
+#
+# A listing in two languages needs two sets, and a German listing showing an
+# English window is a German listing of somebody else's application. `shots.sh`
+# takes `--lang` and writes each set into a subdirectory named as the stores
+# name locales, which is the layout `ship <repo> --shots` reads.
+#
+# Author: David M. Anderson
+# Built with AI assistance (Claude, Anthropic)
+
+name: Store screenshots, macOS
+description: Run packaging/macos/shots.sh once per language and upload what it wrote.
+
+inputs:
+  app:
+    description: The bundle to photograph, relative to the workspace.
+    required: true
+  mode:
+    description: >
+      `reference` takes one plain frame per language, which is what a
+      coordinate gets measured off. `full` takes the set.
+    required: true
+  languages:
+    description: >
+      Which sets to take, space separated, as `shots.sh --lang` takes them.
+      One language is still one subdirectory, so the layout does not change
+      when a second is added.
+    required: false
+    default: en
+  args:
+    description: Further arguments for shots.sh.
+    required: false
+    default: ''
+  out:
+    description: Where shots.sh writes, relative to the workspace.
+    required: false
+    default: dist/screenshots
+  name:
+    description: The artifact name.
+    required: false
+    default: store-screenshots
+
+runs:
+  using: composite
+  steps:
+    - name: There is a bundle to photograph
+      shell: bash
+      env:
+        APP: ${{ inputs.app }}
+        MODE: ${{ inputs.mode }}
+      run: |
+        case "$MODE" in
+          reference|full) ;;
+          *) echo "::error::mac-store-screenshots: mode is reference or full, not '${MODE}'"; exit 1 ;;
+        esac
+        if [ ! -d "$APP" ]; then
+          echo "::error::mac-store-screenshots: no bundle at ${APP}; build it in the step before this one"
+          exit 1
+        fi
+        if [ ! -x packaging/macos/shots.sh ]; then
+          echo "::error::mac-store-screenshots: no packaging/macos/shots.sh; the recipes are the repository's half"
+          exit 1
+        fi
+
+    - name: The Store screenshots
+      shell: bash
+      env:
+        APP: ${{ inputs.app }}
+        MODE: ${{ inputs.mode }}
+        LANGUAGES: ${{ inputs.languages }}
+        EXTRA: ${{ inputs.args }}
+        OUT: ${{ inputs.out }}
+      run: |
+        set -eu
+        # Word splitting is wanted here and nowhere else: both are lists.
+        # shellcheck disable=SC2086
+        for lang in $LANGUAGES; do
+          echo "::group::${lang}"
+          ref=''
+          [ "$MODE" = reference ] && ref=--reference
+          ./packaging/macos/shots.sh --app "$APP" --lang "$lang" --outdir "$OUT" ${ref} ${EXTRA}
+          echo '::endgroup::'
+        done
+
+    - name: Keep them
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{ inputs.name }}
+        path: ${{ inputs.out }}/**/*.png
+        if-no-files-found: error

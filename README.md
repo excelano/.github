@@ -52,16 +52,22 @@ instead:
 | `mac-release-binary` | Builds the universal binary at the floor the Info.plist declares, checks every slice is present, and attaches it for the Mac to sign |
 | `powershell-parses` | Parses every `.ps1` under a path and fails on one that will not, naming the file and the line |
 | `store-screenshots` | Raises the runner's desktop, runs `packaging/windows/shots.ps1`, and uploads what it wrote |
+| `mac-store-screenshots` | Runs `packaging/macos/shots.sh` once per language and uploads what it wrote |
 
 Each of these was the same steps in three or more repos, or — which turned out
 to matter more — was in three and missing from three, and the version that was
 missing is the one that would have caught something. `windows-install-check`
 found the same class of defect in four uninstallers on the day it was shared.
 
-What stays in the caller is what genuinely differs. `store-screenshots` does not
-install an association, build a release or make a demo container, because which
-of those a repo needs is the repo's business; it starts at the point where there
-is something worth photographing.
+What stays in the caller is what genuinely differs. Neither screenshot action
+installs an association, builds a release or makes a demo container, because
+which of those a repo needs is the repo's business; each starts at the point
+where there is something worth photographing.
+
+The two are separate rather than one action with a runner switch, because
+almost nothing about them is shared: one raises a desktop resolution through a
+Windows cmdlet and the other satisfies a macOS privacy gate, and a single file
+carrying both would be two scripts under one name.
 
 ## Why one host per org
 
