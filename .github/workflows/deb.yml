@@ -37,6 +37,11 @@ on:
         required: false
         type: boolean
         default: false
+      fleet_apt:
+        description: 'Add the Excelano apt source before installing, for a package that depends on another of the fleet'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -108,6 +113,19 @@ jobs:
       #
       # Install through apt rather than `dpkg -i`, so a missing dependency is
       # resolved and reported rather than leaving a half-configured package.
+      # A package whose Depends names another of the fleet's is not installable
+      # from Ubuntu's sources alone, and `apt-get install ./x.deb` refuses it
+      # rather than reporting a missing dependency: slipcase-desktop declares
+      # `Depends: slipcase-common`, and that is what it refused on, on both
+      # architectures. The source is added here rather than the dependency
+      # installed by name, so that apt resolves whatever the package declares.
+      #
+      # Off by default. A repository whose packages depend only on the
+      # distribution's is better off proving that they do.
+      - name: The Excelano apt source
+        if: ${{ inputs.fleet_apt }}
+        run: curl -fsSL https://excelano.com/apt/setup.sh | sudo sh
+
       - name: The package installs and the commands run
         run: |
           set -eux
