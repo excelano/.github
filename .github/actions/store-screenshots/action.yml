@@ -26,6 +26,14 @@ inputs:
       `reference` takes one plain frame, which is what a coordinate gets
       measured off. `full` takes the set.
     required: true
+  languages:
+    description: >
+      Which sets to take, space separated, as `shots.ps1 -Lang` takes them. One
+      language is still one subdirectory, so the layout does not change when a
+      second is added. A repository whose `shots.ps1` takes no `-Lang` leaves
+      this empty and gets one set in whatever language the runner is in.
+    required: false
+    default: ''
   args:
     description: Further arguments for shots.ps1, such as -SideLoaded.
     required: false
@@ -85,28 +93,41 @@ runs:
       env:
         SHOT_MODE: ${{ inputs.mode }}
         SHOT_ARGS: ${{ inputs.args }}
+        SHOT_LANGS: ${{ inputs.languages }}
       run: |
         if ($env:SHOT_MODE -notin @('reference', 'full')) {
           throw "store-screenshots: mode is reference or full, not '$($env:SHOT_MODE)'"
         }
-        # Built as an array and passed to `&`, not interpolated into a command
-        # line. `powershell -File` with a splatted hashtable stringifies it and
-        # the receiving script sees one argument, which is how an -All once
-        # reached a build script as the literal text of a hashtable.
-        $argv = @('-ExecutionPolicy', 'Bypass', '-File', 'packaging\windows\shots.ps1')
-        if ($env:SHOT_MODE -eq 'reference') { $argv += '-Reference' }
-        if ($env:SHOT_ARGS) {
-          $argv += $env:SHOT_ARGS.Split(' ', [StringSplitOptions]::RemoveEmptyEntries)
+        # One run per language, or one run with no language where the recipes
+        # take none. A listing in two languages needs two sets, and a German
+        # listing showing an English window is a German listing of somebody
+        # else's application.
+        $langs = if ($env:SHOT_LANGS) {
+          $env:SHOT_LANGS.Split(' ', [StringSplitOptions]::RemoveEmptyEntries)
+        } else { @('') }
+        foreach ($lang in $langs) {
+          if ($lang) { Write-Host "::group::$lang" }
+          # Built as an array and passed to `&`, not interpolated into a command
+          # line. `powershell -File` with a splatted hashtable stringifies it and
+          # the receiving script sees one argument, which is how an -All once
+          # reached a build script as the literal text of a hashtable.
+          $argv = @('-ExecutionPolicy', 'Bypass', '-File', 'packaging\windows\shots.ps1')
+          if ($env:SHOT_MODE -eq 'reference') { $argv += '-Reference' }
+          if ($lang) { $argv += @('-Lang', $lang) }
+          if ($env:SHOT_ARGS) {
+            $argv += $env:SHOT_ARGS.Split(' ', [StringSplitOptions]::RemoveEmptyEntries)
+          }
+          & powershell @argv
+          # `powershell -File` returns its exit code and nothing read it once, so
+          # a refusal reached the next step as a missing directory rather than as
+          # itself.
+          if ($LASTEXITCODE -ne 0) { throw "shots.ps1 exited $LASTEXITCODE" }
+          if ($lang) { Write-Host '::endgroup::' }
         }
-        & powershell @argv
-        # `powershell -File` returns its exit code and nothing read it once, so
-        # a refusal reached the next step as a missing directory rather than as
-        # itself.
-        if ($LASTEXITCODE -ne 0) { throw "shots.ps1 exited $LASTEXITCODE" }
 
     - name: Keep them
       uses: actions/upload-artifact@v7
       with:
         name: ${{ inputs.name }}
-        path: ${{ inputs.out }}/*.png
+        path: ${{ inputs.out }}/**/*.png
         if-no-files-found: error

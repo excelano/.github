@@ -57,6 +57,14 @@ inputs:
     description: Further arguments for shots.sh.
     required: false
     default: ''
+  width:
+    description: The window width shots.sh asks for, which sets how big the desktop has to be.
+    required: false
+    default: '1440'
+  height:
+    description: The window height shots.sh asks for.
+    required: false
+    default: '900'
   out:
     description: Where shots.sh writes, relative to the workspace.
     required: false
@@ -69,6 +77,49 @@ inputs:
 runs:
   using: composite
   steps:
+    # A hosted macOS runner comes up at 1024x768, which cannot hold the
+    # 1440x900 window App Store Connect asks for. System Events clamps the
+    # resize to what fits, the driver reads the frame back at 924x668 and
+    # refuses, and the refusal says nothing about the desktop. Measured
+    # 2026-09-17 on macos-15, taking Slipcase Desktop's first set.
+    #
+    # `displayplacer` is not on the image and comes from Homebrew, which is.
+    # The mode is chosen from what the display actually offers rather than
+    # asserted, because an image changes and a resolution that is not there is
+    # a silent no-op in every tool that sets one.
+    - name: The desktop is big enough to photograph a window on
+      shell: bash
+      env:
+        WANT_W: ${{ inputs.width }}
+        WANT_H: ${{ inputs.height }}
+      run: |
+        set -eu
+        need_w=$((WANT_W + 100))
+        need_h=$((WANT_H + 80))
+        size() {
+          system_profiler SPDisplaysDataType |
+            sed -n 's/.*Resolution: \([0-9]*\) x \([0-9]*\).*/\1 \2/p' | head -1
+        }
+        echo "as found: $(size)"
+        brew list displayplacer >/dev/null 2>&1 || brew install displayplacer
+        id=$(displayplacer list | sed -n 's/^Persistent screen id: //p' | head -1)
+        mode=$(displayplacer list |
+          sed -n 's/^  mode \([0-9]*\): res:\([0-9]*\)x\([0-9]*\) .*/\1 \2 \3/p' |
+          awk -v w="$need_w" -v h="$need_h" '$2 >= w && $3 >= h { print $2 * $3, $1 }' |
+          sort -n | head -1 | cut -d' ' -f2)
+        if [ -n "$mode" ]; then
+          displayplacer "id:${id} mode:${mode}"
+          sleep 2
+          echo "after displayplacer: $(size)"
+        else
+          echo "no mode on this display is at least ${need_w}x${need_h}"
+        fi
+        set -- $(size)
+        if [ "${1:-0}" -lt "$need_w" ] || [ "${2:-0}" -lt "$need_h" ]; then
+          echo "::error::mac-store-screenshots: the desktop is ${1}x${2} and a ${WANT_W}x${WANT_H} window at 100,80 needs ${need_w}x${need_h}"
+          exit 1
+        fi
+
     - name: There is a bundle to photograph
       shell: bash
       env:
