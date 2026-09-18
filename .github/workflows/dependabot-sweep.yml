@@ -94,11 +94,16 @@ jobs:
                 took=$((took + 1)); continue
               fi
 
-              if gh pr merge "$number" --repo "$repo" --squash --delete-branch; then
+              # The refusal is captured rather than left on stderr, because the
+              # one that recurs says nothing about this pull request: a token
+              # without Workflows write cannot merge a bump to a file under
+              # `.github/workflows`, and every `ci:` group is one of those.
+              if why=$(gh pr merge "$number" --repo "$repo" --squash --delete-branch 2>&1); then
                 echo "$repo#$number  merged: $title"
                 took=$((took + 1))
               else
                 echo "$repo#$number  refused the merge, leaving it"
+                printf '%s\n' "$why" | sed 's/^/      /'
                 held=$((held + 1))
               fi
             done <<PRS
