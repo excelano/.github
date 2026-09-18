@@ -1,0 +1,114 @@
+name: dependabot-sweep
+
+# Merges this organisation's green Dependabot pull requests, once a day.
+#
+# It is a sweep rather than something that fires when a pull request's checks
+# go green, because there is no event to hang that on. A check suite created by
+# GitHub Actions does not start another Actions workflow, so a repository whose
+# only checks are its own workflows never hears that they finished. The sweep
+# also recovers by itself: a pull request left behind for any reason is simply
+# looked at again the next morning.
+#
+# One sweep per organisation, living in that organisation's `.github`, because
+# a workflow in excelano reaching into anderix reverses an arrow the fleet
+# holds. The two files are otherwise the same.
+#
+# `FLEET_TOKEN` is a fine-grained personal access token over this
+# organisation's repositories, with Contents and Pull requests write.
+# `GITHUB_TOKEN` cannot do this job: it reaches only the repository it runs in,
+# and a merge it pushes starts no workflow, so `main` would quietly stop being
+# built.
+
+on:
+  schedule:
+    - cron: "0 5 * * *"
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: Say what would merge, and merge nothing
+        type: boolean
+        default: false
+      repo:
+        description: One repository name, instead of all of them
+        type: string
+        default: ""
+
+permissions: {}
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Merge what is green
+        env:
+          GH_TOKEN: ${{ secrets.FLEET_TOKEN }}
+          ORG: ${{ github.repository_owner }}
+          DRY_RUN: ${{ inputs.dry-run }}
+          ONLY: ${{ inputs.repo }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::FLEET_TOKEN is not set. It is a fine-grained token over this organisation's repositories, with Contents and Pull requests write."
+            exit 1
+          fi
+
+          if [ -n "${ONLY:-}" ]; then
+            repos="${ORG}/${ONLY}"
+          else
+            repos=$(gh repo list "$ORG" --limit 200 --no-archived --source \
+                      --json nameWithOwner --jq '.[].nameWithOwner' | sort)
+          fi
+
+          looked=0; took=0; held=0
+
+          for repo in $repos; do
+            prs=$(gh pr list --repo "$repo" --state open --limit 50 \
+                    --json number,headRefOid,author,isDraft,title \
+                    --jq '.[] | select(.author.login == "app/dependabot" and .isDraft == false)
+                              | [.number, .headRefOid, .title] | @tsv') || prs=""
+            [ -n "$prs" ] || continue
+
+            while IFS="$(printf '\t')" read -r number sha title; do
+              [ -n "$number" ] || continue
+              looked=$((looked + 1))
+
+              # Every run on the head commit, not a named few: a repository that
+              # gains a workflow is covered by that alone.
+              runs=$(gh run list --repo "$repo" --commit "$sha" --limit 100 \
+                       --json status,conclusion,name --jq '[.[]]') || runs='[]'
+
+              if ! printf '%s' "$runs" | jq -e 'length > 0' >/dev/null 2>&1; then
+                echo "$repo#$number  nothing ran on ${sha:0:8}, leaving it"
+                held=$((held + 1)); continue
+              fi
+
+              if ! printf '%s' "$runs" | jq -e 'all(.status == "completed" and (.conclusion == "success" or .conclusion == "skipped"))' >/dev/null 2>&1; then
+                echo "$repo#$number  not green yet"
+                printf '%s' "$runs" | jq -r '.[] | select(.status != "completed" or (.conclusion != "success" and .conclusion != "skipped")) | "      \(.name): \(.status) \(.conclusion // "-")"'
+                held=$((held + 1)); continue
+              fi
+
+              if [ "${DRY_RUN:-false}" = "true" ]; then
+                echo "$repo#$number  would merge: $title"
+                took=$((took + 1)); continue
+              fi
+
+              if gh pr merge "$number" --repo "$repo" --squash --delete-branch; then
+                echo "$repo#$number  merged: $title"
+                took=$((took + 1))
+              else
+                echo "$repo#$number  refused the merge, leaving it"
+                held=$((held + 1))
+              fi
+            done <<PRS
+          $prs
+          PRS
+          done
+
+          echo
+          if [ "${DRY_RUN:-false}" = "true" ]; then
+            echo "$looked open, $took ready, $held held"
+          else
+            echo "$looked open, $took merged, $held held"
+          fi
