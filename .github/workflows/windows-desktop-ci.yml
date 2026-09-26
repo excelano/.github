@@ -1,0 +1,299 @@
+name: windows-desktop-ci
+
+# The fleet's Windows CI for a desktop application, in one file. A repo calls
+# it rather than copying it:
+#
+#   jobs:
+#     windows:
+#       uses: excelano/.github/.github/workflows/windows-desktop-ci.yml@main
+#       with:
+#         binary-names: flyleaf
+#       secrets: inherit
+#
+# The six desktop-app repos (flyleaf, slipcase-desktop, slipcase-open,
+# duckling, segler, odox) each hand-copied their own 100-200 line windows.yml,
+# which is why the same "push and pull_request carry no branches filter, so a
+# PR runs the whole job twice" bug landed independently in three of them and
+# had to be pasted into a fourth by hand. Extracted here so a correction
+# reaches all six at once, the way rust-ci.yml already does for the CLI repos.
+#
+# Not everything six repos happen to do is universal, so most of what follows
+# is an input rather than an assumption. Only two steps are unconditional:
+# every DLL check and the Store package, because every one of these six does
+# both the same way. Everything else — whether Rust needs an explicit
+# install, whether the tree is fmt-clean, whether there is a file association
+# to round-trip, whether the icons are generated and checked, whether a
+# screenshot exists to take at all — is a real difference between these
+# products and stays a difference here rather than being forced into one
+# shape.
+#
+# See ~/notes/dry_boundary.md for why this lives here instead of in each repo.
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: 'Tag to package for. Empty builds and keeps the package as an artefact.'
+        required: false
+        type: string
+      binary-names:
+        description: 'Space-separated release binary names, e.g. "flyleaf" or "xodt xods xodp".'
+        required: true
+        type: string
+      workspace:
+        description: 'Build, test and clippy the whole workspace rather than the default package.'
+        required: false
+        default: false
+        type: boolean
+      custom-test-script:
+        description: 'pwsh run instead of a plain cargo test, for a suite with its own retry or timing logic that a bare cargo test would not carry.'
+        required: false
+        default: ''
+        type: string
+      install-rust:
+        description: 'Explicitly install and cache stable, rather than using what the runner image carries.'
+        required: false
+        default: false
+        type: boolean
+      powershell-parses:
+        description: 'Parse every .ps1 under packaging/windows. On by default: nothing else compiles or runs that tree.'
+        required: false
+        default: true
+        type: boolean
+      fmt:
+        description: 'Run cargo fmt --check. Off by default: not every tree here is fmt-clean on purpose.'
+        required: false
+        default: false
+        type: boolean
+      gui-subsystem-check:
+        description: 'Verify each release binary is the GUI subsystem and carries the DPI manifest.'
+        required: false
+        default: false
+        type: boolean
+      install-check-associations:
+        description: 'JSON array of {extension, progId, contentType} for windows-install-check. Empty skips the step.'
+        required: false
+        default: ''
+        type: string
+      install-check-owns-extension:
+        required: false
+        default: 'true'
+        type: string
+      install-check-args:
+        required: false
+        default: '-NoBinary'
+        type: string
+      icon-check:
+        description: 'Run the icon/Store-asset generator and diff its output against the tree.'
+        required: false
+        default: false
+        type: boolean
+      icon-check-dir:
+        description: 'Directory to cd into and `cargo run --release` for the generator. Ignored if icon-check-manifest is set.'
+        required: false
+        default: 'packaging/windows/make-ico'
+        type: string
+      icon-check-manifest:
+        description: 'Cargo manifest to run the generator with --manifest-path instead of cd+run, for a repo whose generator is not under packaging/windows.'
+        required: false
+        default: ''
+        type: string
+      icon-check-paths:
+        description: 'Space-separated paths git diff --exit-code checks after the generator runs.'
+        required: false
+        default: ''
+        type: string
+      screenshots:
+        description: 'no, reference or full - passed through from the callers own workflow_dispatch choice. A repo with no interface to photograph never passes anything but no.'
+        required: false
+        default: 'no'
+        type: string
+      shot-languages:
+        required: false
+        default: 'en de'
+        type: string
+      shot-args:
+        description: 'Further arguments for shots.ps1, such as -SideLoaded or -Only xodt.'
+        required: false
+        default: ''
+        type: string
+      shot-out:
+        required: false
+        default: 'dist/screenshots'
+        type: string
+      pre-screenshot-script:
+        description: 'Bash run before the screenshot step, for whatever gets the window into a state shots.ps1 can open - installing an association, building a demo container, sideloading a build.'
+        required: false
+        default: ''
+        type: string
+      store-package-args:
+        description: 'Extra arguments for build-msix.ps1, such as -All where a repository packages more than one application.'
+        required: false
+        default: ''
+        type: string
+      extra-verify-script:
+        description: 'Bash run after the built-in checks and before the Store package, for a verification unique to one repo rather than shared by several - odoxs icon-embedding check, for instance. Runs on every trigger, push and pull_request included.'
+        required: false
+        default: ''
+        type: string
+      release-only-script:
+        description: 'Bash run in the same place as extra-verify-script, but only when the event is not push or pull_request - for a check expensive enough, or dependent enough on an external clone, that an ordinary push should not pay for it.'
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  # Keyed by the event as well as the tag or ref, so a push to main cannot
+  # cancel a dispatched run that is building a release's package, and a
+  # screenshot-only dispatch with no tag does not collide with one that has
+  # one.
+  group: windows-${{ format('{0}-{1}', github.event_name, github.event.release.tag_name || inputs.tag || github.ref) }}
+  cancel-in-progress: ${{ github.event_name == 'push' || github.event_name == 'pull_request' }}
+
+jobs:
+  windows:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag || github.ref }}
+
+      # The packaging scripts are the only code here that nothing else compiles
+      # or runs, and there is no PowerShell on the Linux lane.
+      - name: The packaging scripts parse
+        if: inputs.powershell-parses
+        uses: excelano/.github/.github/actions/powershell-parses@main
+
+      - name: Install Rust
+        if: inputs.install-rust
+        run: rustup toolchain install stable --profile minimal --component clippy --component rustfmt
+
+      - name: Cache
+        if: inputs.install-rust
+        uses: Swatinem/rust-cache@v2
+
+      - name: What is installed
+        run: |
+          rustc -V
+          cargo -V
+
+      - name: Build
+        run: cargo build ${{ inputs.workspace && '--workspace' || '' }} --all-targets
+
+      - name: Test
+        if: inputs.custom-test-script == ''
+        run: cargo test ${{ inputs.workspace && '--workspace' || '' }}
+
+      - name: Test, this repo's own way
+        if: inputs.custom-test-script != ''
+        shell: pwsh
+        run: ${{ inputs.custom-test-script }}
+
+      - name: Clippy
+        run: cargo clippy ${{ inputs.workspace && '--workspace' || '' }} --all-targets -- -D warnings
+
+      - name: Formatting
+        if: inputs.fmt
+        run: cargo fmt ${{ inputs.workspace && '--all' || '' }} --check
+
+      # slipcase-desktop 0.1.1 was packaged, certified, submitted and failed
+      # Store policy 10.2.4.1 for importing VCRUNTIME140.dll from the Visual
+      # C++ Redistributable, which every build machine has and a tester's clean
+      # one does not. `.cargo/config.toml` is the fix and this is the guard on
+      # it, against the release binary because that is what ships.
+      - name: Every DLL the shipped binary imports comes with Windows
+        run: |
+          cargo build --release
+          powershell -ExecutionPolicy Bypass -File packaging/windows/check-imports.ps1
+
+      # The GUI subsystem comes from an attribute that is off under
+      # debug_assertions, and the DPI declaration is the manifest build.rs
+      # hands the linker; neither build-msix.ps1 nor the certification kit runs
+      # here, so both are read straight out of the release artefact.
+      - name: The shipped binaries are GUI subsystem and declare their DPI awareness
+        if: inputs.gui-subsystem-check
+        shell: pwsh
+        run: |
+          $meta = cargo metadata --format-version 1 --no-deps | ConvertFrom-Json
+          foreach ($app in '${{ inputs.binary-names }}'.Split(' ', [StringSplitOptions]::RemoveEmptyEntries)) {
+            $exe = Join-Path $meta.target_directory "release\$app.exe"
+            $bytes = [System.IO.File]::ReadAllBytes($exe)
+            $pe = [BitConverter]::ToInt32($bytes, 0x3C)
+            $subsystem = [BitConverter]::ToUInt16($bytes, $pe + 92)
+            if ($subsystem -ne 2) {
+              throw "$app is subsystem $subsystem, and a shipped binary must be 2 (Windows GUI)"
+            }
+            $text = [System.Text.Encoding]::UTF8.GetString($bytes)
+            if ($text -notmatch '(?i)permonitorv2') {
+              throw "no per-monitor DPI declaration in $app - build.rs did not embed the application manifest"
+            }
+            Write-Host "$app : subsystem 2, and the application manifest is embedded"
+          }
+
+      # The .ico and the Store assets are committed artefacts, because nothing
+      # on Windows rasterizes an SVG. A committed artefact can fall out of step
+      # with the drawing it was generated from and nothing would say so, so the
+      # generator is run and its output compared against the tree.
+      - name: The committed icon and Store assets still match their generator
+        if: inputs.icon-check
+        shell: bash
+        run: |
+          if [ -n "${{ inputs.icon-check-manifest }}" ]; then
+            cargo run --manifest-path "${{ inputs.icon-check-manifest }}"
+          else
+            (cd "${{ inputs.icon-check-dir }}" && cargo run --release)
+          fi
+          git diff --exit-code -- ${{ inputs.icon-check-paths }}
+
+      # The install scripts against the registry, read back.
+      - name: The integration goes on and comes off cleanly
+        if: inputs.install-check-associations != ''
+        uses: excelano/.github/.github/actions/windows-install-check@main
+        with:
+          associations: ${{ inputs.install-check-associations }}
+          owns-extension: ${{ inputs.install-check-owns-extension }}
+          install-args: ${{ inputs.install-check-args }}
+
+      - name: Extra verification
+        if: inputs.extra-verify-script != ''
+        shell: pwsh
+        run: ${{ inputs.extra-verify-script }}
+
+      - name: Extra verification, not on an ordinary push
+        if: inputs.release-only-script != '' && github.event_name != 'push' && github.event_name != 'pull_request'
+        shell: pwsh
+        timeout-minutes: 10
+        run: ${{ inputs.release-only-script }}
+
+      # The Store takes the package unsigned, and the runner assembles the one
+      # that is uploaded. The publisher is the organisation secret, being the
+      # one value in the identity that is an account's rather than this
+      # product's.
+      - name: The Store package
+        uses: excelano/.github/.github/actions/store-package@main
+        with:
+          publisher: ${{ secrets.STORE_PUBLISHER }}
+          tag: ${{ github.event.release.tag_name || inputs.tag }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          args: ${{ inputs.store-package-args }}
+
+      # Off unless asked for. A bug fix should not pay for a set of Store
+      # screenshots, and a set nobody asked for is a set nobody looks at. A
+      # repo with nothing to photograph never passes anything but the default.
+      - name: Get the window into a state to photograph
+        if: inputs.screenshots && inputs.screenshots != 'no' && inputs.pre-screenshot-script != ''
+        shell: pwsh
+        run: ${{ inputs.pre-screenshot-script }}
+
+      - name: The Store screenshots
+        if: inputs.screenshots && inputs.screenshots != 'no'
+        uses: excelano/.github/.github/actions/store-screenshots@main
+        with:
+          mode: ${{ inputs.screenshots }}
+          languages: ${{ inputs.shot-languages }}
+          args: ${{ inputs.shot-args }}
+          out: ${{ inputs.shot-out }}
