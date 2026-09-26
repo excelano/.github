@@ -55,6 +55,16 @@ on:
         required: false
         default: false
         type: boolean
+      rust-cache-directories:
+        description: 'Newline-separated extra paths for Swatinem/rust-cache to save alongside target/ - for something a build script extracts that Cargo does not track itself, such as a prebuilt runtime.'
+        required: false
+        default: ''
+        type: string
+      rust-cache-env-vars:
+        description: 'Space-separated env-var name prefixes for Swatinem/rust-cache to key on, alongside rust-cache-directories.'
+        required: false
+        default: ''
+        type: string
       powershell-parses:
         description: 'Parse every .ps1 under packaging/windows. On by default: nothing else compiles or runs that tree.'
         required: false
@@ -141,6 +151,21 @@ on:
         required: false
         default: ''
         type: string
+      extra-cache-paths:
+        description: 'Newline-separated paths to cache independently of the Rust build cache, for an asset that does not change when the code does - such as downloaded models. Empty skips the step.'
+        required: false
+        default: ''
+        type: string
+      extra-cache-key-file:
+        description: 'File whose contents key extra-cache-paths - typically the script that fetches them, so a change to what is fetched invalidates the cache.'
+        required: false
+        default: ''
+        type: string
+      extra-cache-fetch-script:
+        description: 'Bash run to populate extra-cache-paths after the cache is restored - expected to be idempotent, skipping what it already has. Runs when screenshots are requested or the event is release-worthy, the same condition as the Store package.'
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: write
@@ -175,6 +200,9 @@ jobs:
       - name: Cache
         if: inputs.install-rust
         uses: Swatinem/rust-cache@v2
+        with:
+          cache-directories: ${{ inputs.rust-cache-directories }}
+          env-vars: ${{ inputs.rust-cache-env-vars }}
 
       - name: What is installed
         run: |
@@ -268,6 +296,22 @@ jobs:
         shell: pwsh
         timeout-minutes: 10
         run: ${{ inputs.release-only-script }}
+
+      # Independent of the Rust build cache on purpose: this doesn't change
+      # when the code does, so tying its lifecycle to Cargo.lock would empty
+      # it on every dependency bump for no reason. Gated the same as the Store
+      # package below, so an ordinary push never pays for it.
+      - name: A cache for what does not change with the code
+        if: inputs.extra-cache-fetch-script != '' && ((inputs.screenshots && inputs.screenshots != 'no') || github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.tag != ''))
+        uses: actions/cache@v6
+        with:
+          path: ${{ inputs.extra-cache-paths }}
+          key: extra-${{ runner.os }}-${{ hashFiles(inputs.extra-cache-key-file) }}
+
+      - name: Fetch what that cache holds
+        if: inputs.extra-cache-fetch-script != '' && ((inputs.screenshots && inputs.screenshots != 'no') || github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.tag != ''))
+        shell: bash
+        run: ${{ inputs.extra-cache-fetch-script }}
 
       # The Store takes the package unsigned, and the runner assembles the one
       # that is uploaded. The publisher is the organisation secret, being the
