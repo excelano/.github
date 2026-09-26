@@ -302,14 +302,18 @@ jobs:
       # it on every dependency bump for no reason. Gated the same as the Store
       # package below, so an ordinary push never pays for it.
       - name: A cache for what does not change with the code
-        if: inputs.extra-cache-fetch-script != '' && ((inputs.screenshots && inputs.screenshots != 'no') || github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.tag != ''))
+        if: inputs.extra-cache-fetch-script != ''
         uses: actions/cache@v6
         with:
           path: ${{ inputs.extra-cache-paths }}
           key: extra-${{ runner.os }}-${{ hashFiles(inputs.extra-cache-key-file) }}
 
+      # Unconditional whenever a caller sets this, the same as the Store
+      # package below: an ordinary push builds that package too, on every repo
+      # that has one, so anything the package needs has to be fetched on every
+      # trigger, not only when screenshots or a release make the need obvious.
       - name: Fetch what that cache holds
-        if: inputs.extra-cache-fetch-script != '' && ((inputs.screenshots && inputs.screenshots != 'no') || github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.tag != ''))
+        if: inputs.extra-cache-fetch-script != ''
         shell: bash
         run: ${{ inputs.extra-cache-fetch-script }}
 
