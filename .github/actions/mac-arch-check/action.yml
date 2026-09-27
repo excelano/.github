@@ -1,0 +1,24 @@
+# A runner label is a promise rather than a fact: `macos-13` is Intel and
+# `macos-14` onwards is Apple silicon, a mapping GitHub can change without
+# notice. Every Mac lane in the fleet checks this before trusting anything
+# else the job does, so a mapping change fails loudly here instead of quietly
+# testing x86_64 twice under an arm64 label.
+#
+# Author: David M. Anderson
+# Built with AI assistance (Claude, Anthropic)
+
+name: Mac arch check
+description: Fail loudly if the runner is not actually Apple silicon.
+
+runs:
+  using: composite
+  steps:
+    - name: The runner is Apple silicon
+      shell: bash
+      run: |
+        arch=$(uname -m)
+        echo "runner reports ${arch}"
+        [ "$arch" = arm64 ] || {
+          echo "this workflow exists to run the arm64 build and the runner is ${arch}" >&2
+          exit 1
+        }

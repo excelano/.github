@@ -1,0 +1,32 @@
+# For eyes, not for the verdict: the step that decided pass or fail already
+# ran. `screencapture` can return the desktop with every window omitted and
+# report no error, so a green tick here says nothing about a window - it is
+# a courtesy for whoever wants to look, kept as an artefact either way.
+#
+# Author: David M. Anderson
+# Built with AI assistance (Claude, Anthropic)
+
+name: Mac photograph
+description: Capture the screen and keep it as an artifact, for a person to look at.
+
+inputs:
+  if-no-files-found:
+    description: Passed through to actions/upload-artifact - warn or ignore, depending on whether a missing screenshot here is worth a build annotation.
+    required: false
+    default: warn
+
+runs:
+  using: composite
+  steps:
+    - name: Photograph it, for a person
+      shell: bash
+      run: |
+        screencapture -x "${RUNNER_TEMP}/screen.png" || true
+        ls -l "${RUNNER_TEMP}/screen.png" || true
+
+    - name: Keep the photograph
+      uses: actions/upload-artifact@v7
+      with:
+        name: arm64-window
+        path: ${{ runner.temp }}/screen.png
+        if-no-files-found: ${{ inputs.if-no-files-found }}
