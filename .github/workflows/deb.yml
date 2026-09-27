@@ -42,6 +42,11 @@ on:
         required: false
         type: boolean
         default: false
+      commands:
+        description: 'The commands the package installs, where they are not the ship.conf commands: a second package from one repository, whose command ship.conf cannot name because its commands name the Homebrew formulas'
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: write
@@ -83,11 +88,19 @@ jobs:
       # is right for every caller but paxc, whose `commands=paxc paxr` first
       # reaches a tagged tree at its next release; until then `paxr` goes
       # untested, as it has all along.
+      #
+      # A caller building a second package names that package's commands
+      # itself. plene ships the CLI and a window as two packages from one repo;
+      # ship.conf's `commands` names the Homebrew formulas, and the tap carries
+      # the CLI only, so the window's command cannot be listed there.
       - name: What the packages install
         id: what
+        env:
+          COMMANDS: ${{ inputs.commands }}
         run: |
           set -eu
-          commands=$(sed -n 's/^commands=//p' ship.conf 2>/dev/null || true)
+          commands=$COMMANDS
+          [ -n "$commands" ] || commands=$(sed -n 's/^commands=//p' ship.conf 2>/dev/null || true)
           [ -n "$commands" ] || commands="${GITHUB_REPOSITORY#*/}"
           echo "commands=$commands" >> "$GITHUB_OUTPUT"
 
