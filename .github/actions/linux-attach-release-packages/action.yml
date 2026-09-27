@@ -1,0 +1,24 @@
+name: Linux attach release packages
+description: Download the built .deb artifacts from every matrix leg and attach them to the release being published or dispatched for.
+inputs:
+  tag:
+    description: The tag to attach packages to - typically github.event.release.tag_name || inputs.tag.
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: actions/download-artifact@v8
+      with:
+        path: packages
+        merge-multiple: true
+
+    - name: Attach the packages to the release
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        GH_REPO: ${{ github.repository }}
+        TAG: ${{ inputs.tag }}
+      run: |
+        set -eu
+        ls -l packages
+        gh release upload "$TAG" packages/*.deb --clobber

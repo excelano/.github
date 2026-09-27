@@ -1,0 +1,16 @@
+name: Linux lintian check
+description: Fail on anything lintian rates error or warning, with no tag-count ceiling and no overrides.
+inputs:
+  deb-glob:
+    description: Glob or path matching the .deb file(s) to check.
+    required: false
+    default: dist/*.deb
+runs:
+  using: composite
+  steps:
+    - name: What lintian says
+      shell: bash
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq lintian
+        lintian --info --tag-display-limit 0 --fail-on error,warning ${{ inputs.deb-glob }}

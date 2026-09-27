@@ -1,0 +1,39 @@
+name: Linux install check
+description: Install the package(s) and confirm each executable loads - the loader accepts it and everything it links resolves - read from how it fails, since nothing headless reaches a window.
+inputs:
+  deb-glob:
+    description: Glob matching the .deb file(s) to install.
+    required: false
+    default: dist/*.deb
+  binaries:
+    description: Space-separated executable names to check, one per package installed.
+    required: true
+  timeout-seconds:
+    description: How long to let the executable run before killing it and reading what it printed.
+    required: false
+    default: '20'
+runs:
+  using: composite
+  steps:
+    - name: It installs, and the executable loads
+      shell: bash
+      run: |
+        set -eu
+        sudo apt-get install -y ./${{ inputs.deb-glob }}
+
+        for app in ${{ inputs.binaries }}; do
+          command -v "$app"
+          file -L "$(command -v "$app")"
+
+          missing=$(ldd "$(command -v "$app")" | grep 'not found' || true)
+          [ -z "$missing" ] || { echo "${app} installed but does not resolve:"; echo "$missing"; exit 1; }
+
+          out=$(timeout ${{ inputs.timeout-seconds }} "$app" 2>&1 || true)
+          printf '%s\n' "$out" | sed "s/^/  ${app}: /"
+          case "$out" in
+              *'error while loading shared libraries'*)
+                  echo "the loader refused ${app}" >&2; exit 1 ;;
+              *'cannot execute binary file'*|*'Exec format error'*)
+                  echo "${app} is not this machine's architecture" >&2; exit 1 ;;
+          esac
+        done

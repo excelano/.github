@@ -1,0 +1,38 @@
+name: Linux package integrity check
+description: Verify a .deb's contents are root/root, carry only expected modes, and that md5sums are present and every recorded hash agrees with the file it names.
+inputs:
+  deb-glob:
+    description: Glob matching the .deb file(s) to check - looped, so more than one is fine.
+    required: false
+    default: dist/*.deb
+  allow-symlinks:
+    description: Whether a symlink (mode lrwxrwxrwx) is an expected mode, alongside the standard directory/file/executable modes.
+    required: false
+    default: 'false'
+runs:
+  using: composite
+  steps:
+    - name: The package holds up
+      shell: bash
+      run: |
+        pattern='^(drwxr-xr-x|-rw-r--r--|-rwxr-xr-x)$'
+        if [ "${{ inputs.allow-symlinks }}" = "true" ]; then
+          pattern='^(drwxr-xr-x|-rw-r--r--|-rwxr-xr-x|lrwxrwxrwx)$'
+        fi
+        for deb in ${{ inputs.deb-glob }}; do
+          echo "checking ${deb}"
+
+          strange=$(dpkg-deb --contents "$deb" | awk '$2 != "root/root"')
+          [ -z "$strange" ] || { echo "not root/root:"; echo "$strange"; exit 1; }
+
+          strange=$(dpkg-deb --contents "$deb" | awk -v pat="$pattern" '$1 !~ pat')
+          [ -z "$strange" ] || { echo "unexpected modes:"; echo "$strange"; exit 1; }
+
+          dpkg-deb --ctrl-tarfile "$deb" | tar t | grep -qx './md5sums' ||
+              { echo "the package ships no md5sums" >&2; exit 1; }
+
+          tree="${RUNNER_TEMP}/tree-$(basename "$deb" .deb)"
+          dpkg-deb -x "$deb" "$tree"
+          dpkg-deb -e "$deb" "${tree}/DEBIAN"
+          ( cd "$tree" && md5sum -c DEBIAN/md5sums --quiet )
+        done
