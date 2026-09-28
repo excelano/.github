@@ -28,6 +28,11 @@ on:
         required: false
         default: false
         type: boolean
+      platforms:
+        description: Runners to vet and test on, as a JSON array. Forwarded to go-ci.
+        required: false
+        default: '["ubuntu-latest"]'
+        type: string
 
 permissions:
   contents: read
@@ -38,7 +43,9 @@ jobs:
     uses: excelano/.github/.github/workflows/go-ci.yml@main
     with:
       race: ${{ inputs.race }}
+      platforms: ${{ inputs.platforms }}
 
+  # The floor proves a toolchain version, not a platform, so Linux is enough.
   floor:
     name: Declared minimum
     runs-on: ubuntu-latest

@@ -35,6 +35,15 @@ on:
         required: false
         default: false
         type: boolean
+      platforms:
+        description: >-
+          Runners to vet and test on, as a JSON array. Linux alone by default.
+          Add windows-latest or macos-latest where a module has code behind a
+          build tag for that platform, which compiles and vets from Linux but
+          never executes there.
+        required: false
+        default: '["ubuntu-latest"]'
+        type: string
 
 permissions:
   contents: read
@@ -42,8 +51,20 @@ permissions:
 jobs:
   test:
     name: Vet and test
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(inputs.platforms) }}
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
     steps:
+      # Windows runners check out with CRLF line endings, and gofmt reports
+      # every such file as unformatted.
+      - name: Keep line endings as committed
+        run: git config --global core.autocrlf false
+
       - name: Checkout
         uses: actions/checkout@v7
 
