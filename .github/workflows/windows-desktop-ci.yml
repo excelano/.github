@@ -22,10 +22,15 @@ name: windows-desktop-ci
 # every DLL check and the Store package, because every one of these six does
 # both the same way. Everything else — whether Rust needs an explicit
 # install, whether the tree is fmt-clean, whether there is a file association
-# to round-trip, whether the icons are generated and checked, whether a
-# screenshot exists to take at all — is a real difference between these
-# products and stays a difference here rather than being forced into one
-# shape.
+# to round-trip, whether the icons are generated and checked — is a real
+# difference between these products and stays a difference here rather than
+# being forced into one shape.
+#
+# Screenshots are not here at all - they moved to each repo's own
+# screenshots.yml, calling windows-screenshots.yml, so a screenshot dispatch
+# doesn't drag in the DLL check, the icon check or the Store package, none of
+# which it needs. That conflation is what this file used to have and
+# FIX-CI.md flags directly.
 #
 # See ~/notes/dry_boundary.md for why this lives here instead of in each repo.
 
@@ -110,29 +115,6 @@ on:
         type: string
       icon-check-paths:
         description: 'Space-separated paths git diff --exit-code checks after the generator runs.'
-        required: false
-        default: ''
-        type: string
-      screenshots:
-        description: 'no, reference or full - passed through from the callers own workflow_dispatch choice. A repo with no interface to photograph never passes anything but no.'
-        required: false
-        default: 'no'
-        type: string
-      shot-languages:
-        required: false
-        default: 'en de'
-        type: string
-      shot-args:
-        description: 'Further arguments for shots.ps1, such as -SideLoaded or -Only xodt.'
-        required: false
-        default: ''
-        type: string
-      shot-out:
-        required: false
-        default: 'dist/screenshots'
-        type: string
-      pre-screenshot-script:
-        description: 'Bash run before the screenshot step, for whatever gets the window into a state shots.ps1 can open - installing an association, building a demo container, sideloading a build.'
         required: false
         default: ''
         type: string
@@ -328,20 +310,3 @@ jobs:
           tag: ${{ github.event.release.tag_name || inputs.tag }}
           token: ${{ secrets.GITHUB_TOKEN }}
           args: ${{ inputs.store-package-args }}
-
-      # Off unless asked for. A bug fix should not pay for a set of Store
-      # screenshots, and a set nobody asked for is a set nobody looks at. A
-      # repo with nothing to photograph never passes anything but the default.
-      - name: Get the window into a state to photograph
-        if: inputs.screenshots && inputs.screenshots != 'no' && inputs.pre-screenshot-script != ''
-        shell: pwsh
-        run: ${{ inputs.pre-screenshot-script }}
-
-      - name: The Store screenshots
-        if: inputs.screenshots && inputs.screenshots != 'no'
-        uses: excelano/.github/.github/actions/store-screenshots@main
-        with:
-          mode: ${{ inputs.screenshots }}
-          languages: ${{ inputs.shot-languages }}
-          args: ${{ inputs.shot-args }}
-          out: ${{ inputs.shot-out }}

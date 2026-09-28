@@ -1,0 +1,109 @@
+name: appstore-prep
+
+# Mac App Store prep, for the fleet: open or reuse the version record, push
+# the listing text and release notes, confirm (and optionally place)
+# screenshots. No certificate is used or needed — this is CI's whole share
+# of a Mac App Store release. Signing, uploading the build, and submitting
+# for review stay local, on the one Mac holding the Apple Distribution key.
+#
+# One product per call. A repo shipping more than one application to the Mac
+# App Store (odox: xodt, xods, xodp) calls this once per bundle id, from its
+# own caller — a matrix belongs in the caller, the way odox's Windows and
+# Mac lanes already carry their own per-application loops rather than this
+# file guessing how many products a caller has.
+#
+# workflow_call only, the same shape as deb.yml and windows-desktop-ci.yml:
+# the dispatch trigger belongs in each caller's own thin wrapper, which is
+# what makes a run that failed on a transient API error or a rotated
+# credential re-runnable against the same version without anything upstream
+# having to happen again.
+#
+# Requires these secrets from the caller (secrets: inherit):
+#   APPSTORE_CONNECT_KEY_ID    the ten characters in the .p8 file's name
+#   APPSTORE_CONNECT_ISSUER_ID from App Store Connect, Users and Access,
+#                               Integrations, Team Keys
+#   APPSTORE_CONNECT_KEY        the .p8 private key's contents
+#
+# Author: David M. Anderson
+# Built with AI assistance (Claude, Anthropic)
+
+on:
+  workflow_call:
+    inputs:
+      bundle-id:
+        description: The CFBundleIdentifier App Store Connect knows this application by.
+        required: true
+        type: string
+      version:
+        description: The version being released, e.g. 1.2.3 (no leading v).
+        required: true
+        type: string
+      listing-toml:
+        required: false
+        default: packaging/store-listing.toml
+        type: string
+      notes-toml:
+        required: false
+        default: packaging/release-notes.toml
+        type: string
+      product-key:
+        description: The [products.<key>] table, for a repo shipping more than one application.
+        required: false
+        default: ''
+        type: string
+      locales:
+        description: Space-separated locales in ship.conf's spelling, e.g. "en-us de-de".
+        required: true
+        type: string
+      screenshots-run-id:
+        description: >
+          The run ID of a mac-screenshots.yml dispatch to place frames from -
+          gh run list gives it, or the URL of that run. Empty confirms
+          existing coverage only, places nothing.
+        required: false
+        default: ''
+        type: string
+      dry-run:
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  prep:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # mac-screenshots.yml is a separate, independently-dispatched run, so
+      # its artifact has to be fetched by run ID rather than found lying
+      # around - download-artifact only looks within the current run without
+      # one. The artifact's own path, dist/screenshots/**/*.png, uploads with
+      # dist/screenshots/ as the common ancestor, so this lands as exactly
+      # the <Apple-tag>/<NN-name>.png tree appstore_prep.py expects.
+      - name: The screenshots from that run, if any
+        if: inputs.screenshots-run-id != ''
+        uses: actions/download-artifact@v8
+        with:
+          name: store-screenshots
+          run-id: ${{ inputs.screenshots-run-id }}
+          github-token: ${{ github.token }}
+          path: /tmp/screenshots
+
+      - name: App Store Connect prep
+        uses: excelano/.github/.github/actions/appstore-prep@main
+        with:
+          bundle-id: ${{ inputs.bundle-id }}
+          version: ${{ inputs.version }}
+          key-id: ${{ secrets.APPSTORE_CONNECT_KEY_ID }}
+          issuer-id: ${{ secrets.APPSTORE_CONNECT_ISSUER_ID }}
+          private-key: ${{ secrets.APPSTORE_CONNECT_KEY }}
+          listing-toml: ${{ inputs.listing-toml || 'packaging/store-listing.toml' }}
+          notes-toml: ${{ inputs.notes-toml || 'packaging/release-notes.toml' }}
+          product-key: ${{ inputs.product-key }}
+          locales: ${{ inputs.locales }}
+          screenshots-dir: ${{ inputs.screenshots-run-id != '' && '/tmp/screenshots' || '' }}
+          dry-run: ${{ inputs.dry-run }}

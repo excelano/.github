@@ -1,0 +1,106 @@
+name: version-bump
+
+# Bump a repo's version, refresh its dependencies, and push the commit with a
+# stored token rather than GITHUB_TOKEN - a GITHUB_TOKEN push does not fire
+# downstream workflow triggers, and the whole point of this commit is that
+# the fleet's ordinary push-triggered checks run against it before anyone
+# tags it. workflow_dispatch only, by design: a human decides when to bump,
+# the same way they decide today: there is no automatic trigger to get right
+# or get wrong.
+#
+# Two languages, because the fleet has both. Rust bumps Cargo.toml(s) with
+# cargo-edit's `cargo set-version` and refreshes with `cargo update`. Go has
+# no version file at all - goreleaser reads the version from the tag itself -
+# so a Go caller passes no manifest-paths and this only refreshes
+# dependencies (`go get -u` + `go mod tidy`); the tag itself is what
+# tag-release.yml is for.
+#
+# Requires secrets.RELEASE_TOKEN from the caller (secrets: inherit) - a
+# classic PAT with repo + workflow scope, not yet created as an org secret.
+#
+# Author: David M. Anderson
+# Built with AI assistance (Claude, Anthropic)
+
+on:
+  workflow_call:
+    inputs:
+      bump:
+        description: 'patch, minor or major. Ignored if manifest-paths is empty.'
+        required: false
+        default: patch
+        type: string
+      manifest-paths:
+        description: 'Space-separated Cargo.toml paths to bump. Empty skips the version bump and only refreshes dependencies - the Go repos'' case.'
+        required: false
+        default: ''
+        type: string
+      workspace:
+        description: 'Bump every workspace member together, for a repo that is a real Cargo workspace rather than one package.'
+        required: false
+        default: false
+        type: boolean
+      language:
+        description: 'rust or go - which dependency-refresh command runs.'
+        required: false
+        default: rust
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          token: ${{ secrets.RELEASE_TOKEN }}
+
+      - name: Install Rust
+        if: inputs.language == 'rust'
+        run: rustup toolchain install stable --profile minimal
+
+      - name: cargo-edit, for set-version
+        if: inputs.manifest-paths != ''
+        run: cargo install cargo-edit --locked
+
+      - name: Bump the version
+        if: inputs.manifest-paths != ''
+        run: |
+          set -eu
+          for manifest in ${{ inputs.manifest-paths }}; do
+            cargo set-version --bump "${{ inputs.bump }}" --manifest-path "$manifest" ${{ inputs.workspace && '--workspace' || '' }}
+          done
+
+      - name: Refresh dependencies, Rust
+        if: inputs.language == 'rust'
+        run: cargo update
+
+      - name: Refresh dependencies, Go
+        if: inputs.language == 'go'
+        run: |
+          go get -u ./...
+          go mod tidy
+
+      - name: Commit and push, if anything changed
+        env:
+          GIT_AUTHOR_NAME: excelano-release-bot
+          GIT_AUTHOR_EMAIL: release-bot@excelano.com
+          GIT_COMMITTER_NAME: excelano-release-bot
+          GIT_COMMITTER_EMAIL: release-bot@excelano.com
+        run: |
+          set -eu
+          git add -A
+          if git diff --cached --quiet; then
+            echo "nothing changed - version already at this level, or dependencies already current"
+            exit 0
+          fi
+          if [ -n "${{ inputs.manifest-paths }}" ]; then
+            first=$(printf '%s\n' ${{ inputs.manifest-paths }} | head -1)
+            version=$(sed -n '0,/^version *= *"/s//&/p' "$first" | head -1 | sed -n 's/^version *= *"\([^"]*\)".*/\1/p')
+            msg="chore: bump to ${version:-${{ inputs.bump }}}"
+          else
+            msg="chore: refresh dependencies"
+          fi
+          git commit -m "$msg"
+          git push

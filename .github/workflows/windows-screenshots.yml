@@ -1,0 +1,118 @@
+name: windows-screenshots
+
+# On-demand Store screenshots for a Windows desktop app, split out of
+# windows-desktop-ci.yml so a screenshot dispatch doesn't drag in the DLL
+# check, the icon check, the install-association check or the Store package -
+# none of that is needed to photograph a release build, and FIX-CI.md flags
+# exactly this conflation. dispatch-only: no push, pull_request or release
+# trigger belongs here, and no tag to attach anything to - each caller's own
+# screenshots.yml names the mode and whatever else it needs.
+#
+# The frames are of the release build of the commit, never the Store package:
+# a Store package cannot be launched off the Store. See store-screenshots'
+# own header - the same reason macOS's screenshots.yml works the same way.
+#
+# Author: David M. Anderson
+# Built with AI assistance (Claude, Anthropic)
+
+on:
+  workflow_call:
+    inputs:
+      workspace:
+        description: 'Build the whole workspace rather than the default package.'
+        required: false
+        default: false
+        type: boolean
+      install-rust:
+        description: 'Explicitly install and cache stable, rather than using what the runner image carries.'
+        required: false
+        default: false
+        type: boolean
+      rust-cache-directories:
+        required: false
+        default: ''
+        type: string
+      rust-cache-env-vars:
+        required: false
+        default: ''
+        type: string
+      extra-cache-paths:
+        description: 'Newline-separated paths to cache independently of the Rust build cache. Empty skips the step.'
+        required: false
+        default: ''
+        type: string
+      extra-cache-key-file:
+        required: false
+        default: ''
+        type: string
+      extra-cache-fetch-script:
+        description: 'Bash run to populate extra-cache-paths after the cache is restored - expected to be idempotent.'
+        required: false
+        default: ''
+        type: string
+      pre-screenshot-script:
+        description: 'pwsh run after the release build, to get the window into a state shots.ps1 can open - installing an association, side-loading, building a demo container. Empty when shots.ps1 needs nothing done first, e.g. launching a release executable directly.'
+        required: false
+        default: ''
+        type: string
+      mode:
+        description: 'reference takes one plain frame; full takes the set.'
+        required: true
+        type: string
+      shot-languages:
+        required: false
+        default: 'en de'
+        type: string
+      shot-args:
+        required: false
+        default: ''
+        type: string
+      shot-out:
+        required: false
+        default: 'dist/screenshots'
+        type: string
+
+jobs:
+  screenshots:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust
+        if: inputs.install-rust
+        run: rustup toolchain install stable --profile minimal
+
+      - name: Cache
+        if: inputs.install-rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-directories: ${{ inputs.rust-cache-directories }}
+          env-vars: ${{ inputs.rust-cache-env-vars }}
+
+      - name: A cache for what does not change with the code
+        if: inputs.extra-cache-fetch-script != ''
+        uses: actions/cache@v6
+        with:
+          path: ${{ inputs.extra-cache-paths }}
+          key: extra-${{ runner.os }}-${{ hashFiles(inputs.extra-cache-key-file) }}
+
+      - name: Fetch what that cache holds
+        if: inputs.extra-cache-fetch-script != ''
+        shell: bash
+        run: ${{ inputs.extra-cache-fetch-script }}
+
+      - name: Build, release
+        run: cargo build --release ${{ inputs.workspace && '--workspace' || '' }}
+
+      - name: Get the window into a state to photograph
+        if: inputs.pre-screenshot-script != ''
+        shell: pwsh
+        run: ${{ inputs.pre-screenshot-script }}
+
+      - name: The Store screenshots
+        uses: excelano/.github/.github/actions/store-screenshots@main
+        with:
+          mode: ${{ inputs.mode }}
+          languages: ${{ inputs.shot-languages }}
+          args: ${{ inputs.shot-args }}
+          out: ${{ inputs.shot-out }}

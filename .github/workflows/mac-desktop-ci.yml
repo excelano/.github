@@ -1,0 +1,270 @@
+name: mac-desktop-ci
+
+# The fleet's Mac CI for a desktop application, in one file. A repo calls it
+# rather than copying it:
+#
+#   jobs:
+#     mac:
+#       uses: excelano/.github/.github/workflows/mac-desktop-ci.yml@main
+#       with:
+#         binary-1: flyleaf
+#         bundle-script: |
+#           ...assemble the bundle, open a document, check the window...
+#       secrets: inherit
+#
+# Five desktop-app repos (flyleaf, duckling, segler, odox, slipcase-desktop)
+# each hand-copied their own apple-silicon.yml/macos.yml. Extracted here the
+# same way windows-desktop-ci.yml already collapsed the Windows side - see
+# ~/notes/dry_boundary.md for why this lives here instead of in each repo.
+#
+# Bundle assembly and the window-opens-a-document check stay OUT of this
+# file, unlike windows-desktop-ci.yml's Store package: five repos build five
+# different bundles from five different binaries, open five different kinds
+# of document, and diagnose a missing window five different ways (odox's
+# crash-report diagnosis has no equivalent anywhere else). Forcing that into
+# one shape would either lose real per-repo checks or grow an input for every
+# difference until the file was longer than the five it replaced. `
+# bundle-script` is the whole thing as one opaque block, run inline - the
+# same escape hatch windows-desktop-ci.yml already uses for the logic that
+# doesn't generalize (`extra-verify-script`, `custom-test-script`).
+#
+# Screenshot capture is not here at all. It moves to each repo's own
+# screenshots.yml (Phase D) rather than living behind an `if: inputs.
+# screenshots` in the workflow that also builds and tests - the same
+# conflation FIX-CI.md flags in windows-desktop-ci.yml's current shape and
+# this file was written to avoid from the start.
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: 'Tag to build the release binary/binaries for. Empty runs the suite without attaching anything.'
+        required: false
+        type: string
+      workspace:
+        description: 'Build, test and clippy the whole workspace rather than the default package.'
+        required: false
+        default: false
+        type: boolean
+      fmt:
+        description: 'Run cargo fmt --check (--all --check with workspace).'
+        required: false
+        default: false
+        type: boolean
+      deployment-target:
+        description: 'MACOSX_DEPLOYMENT_TARGET for every step in this job. Empty uses the runner default.'
+        required: false
+        default: ''
+        type: string
+      pre-build-script:
+        description: 'Bash run before cargo build - fetching or caching something the build needs that is not a Cargo dependency.'
+        required: false
+        default: ''
+        type: string
+      extra-verify-script:
+        description: 'Bash run after clippy/fmt and before the bundle - a check unique to one repo. Runs on every trigger, push and pull_request included.'
+        required: false
+        default: ''
+        type: string
+      release-only-script:
+        description: 'Bash run in the same place as extra-verify-script, but only when the event is not push or pull_request - for a check expensive enough, or dependent enough on an external clone, that an ordinary push should not pay for it.'
+        required: false
+        default: ''
+        type: string
+      bundle-script:
+        description: 'Bash: assemble the bundle, open a document through Launch Services, and check the window appeared. Per-repo on purpose - see the header above.'
+        required: true
+        type: string
+      photograph-if-no-files-found:
+        required: false
+        default: 'warn'
+        type: string
+      keep-artifact-name:
+        description: 'Name for a debug artefact bundle-script wrote (e.g. crash reports) - empty keeps nothing beyond the photograph.'
+        required: false
+        default: ''
+        type: string
+      keep-artifact-path:
+        description: 'Directory under the runner temp dir to keep, e.g. "crashes" - a plain name, not an expression: an input value is a string, not re-evaluated.'
+        required: false
+        default: ''
+        type: string
+      extra-cache-paths:
+        description: 'Newline-separated paths to cache independently of the Rust build cache, for an asset that does not change when the code does. Empty skips the step.'
+        required: false
+        default: ''
+        type: string
+      extra-cache-key-file:
+        description: 'File whose contents key extra-cache-paths.'
+        required: false
+        default: ''
+        type: string
+      extra-cache-fetch-script:
+        description: 'Bash run to populate extra-cache-paths after the cache is restored - expected to be idempotent, skipping what it already has. Runs unconditionally, same as pre-build-script.'
+        required: false
+        default: ''
+        type: string
+      binary-1:
+        description: 'First release binary name. Empty builds and attaches nothing.'
+        required: false
+        default: ''
+        type: string
+      package-1:
+        required: false
+        default: ''
+        type: string
+      targets-1:
+        required: false
+        default: ''
+        type: string
+      binary-2:
+        description: 'Second release binary, for a repo shipping more than one bundle from one workspace (odox).'
+        required: false
+        default: ''
+        type: string
+      package-2:
+        required: false
+        default: ''
+        type: string
+      targets-2:
+        required: false
+        default: ''
+        type: string
+      binary-3:
+        required: false
+        default: ''
+        type: string
+      package-3:
+        required: false
+        default: ''
+        type: string
+      targets-3:
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  # Keyed by the event as well as the tag or ref, so a push to main cannot
+  # cancel a dispatched run that is building a release's binary. Two of the
+  # five callers had no concurrency group at all before this file existed -
+  # not a difference worth keeping, so it applies to all five now.
+  group: mac-desktop-${{ format('{0}-{1}', github.event_name, github.event.release.tag_name || inputs.tag || github.ref) }}
+  cancel-in-progress: ${{ github.event_name == 'push' || github.event_name == 'pull_request' }}
+
+jobs:
+  mac:
+    runs-on: macos-15
+    env:
+      MACOSX_DEPLOYMENT_TARGET: ${{ inputs.deployment-target }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag || github.ref }}
+
+      - name: The runner is Apple silicon
+        uses: excelano/.github/.github/actions/mac-arch-check@main
+
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal --component clippy --component rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: What is installed
+        run: rustc -V && cargo -V && xcodebuild -version | head -1
+
+      # Independent of the Rust build cache: this doesn't change when the
+      # code does, so tying its lifecycle to Cargo.lock would empty it on
+      # every dependency bump for no reason.
+      - name: A cache for what does not change with the code
+        if: inputs.extra-cache-fetch-script != ''
+        uses: actions/cache@v6
+        with:
+          path: ${{ inputs.extra-cache-paths }}
+          key: extra-${{ runner.os }}-${{ hashFiles(inputs.extra-cache-key-file) }}
+
+      - name: Fetch what that cache holds
+        if: inputs.extra-cache-fetch-script != ''
+        run: ${{ inputs.extra-cache-fetch-script }}
+
+      - name: Before the build
+        if: inputs.pre-build-script != ''
+        run: ${{ inputs.pre-build-script }}
+
+      - name: Build
+        run: cargo build ${{ inputs.workspace && '--workspace' || '' }} --all-targets
+
+      - name: Test
+        run: cargo test ${{ inputs.workspace && '--workspace' || '' }}
+
+      - name: Clippy
+        run: cargo clippy ${{ inputs.workspace && '--workspace' || '' }} --all-targets -- -D warnings
+
+      - name: Formatting
+        if: inputs.fmt
+        run: cargo fmt ${{ inputs.workspace && '--all' || '' }} --check
+
+      - name: Extra verification
+        if: inputs.extra-verify-script != ''
+        run: ${{ inputs.extra-verify-script }}
+
+      - name: Extra verification, not on an ordinary push
+        if: inputs.release-only-script != '' && github.event_name != 'push' && github.event_name != 'pull_request'
+        timeout-minutes: 10
+        run: ${{ inputs.release-only-script }}
+
+      - name: The bundle, opened and checked
+        run: ${{ inputs.bundle-script }}
+
+      - name: Photograph it, for a person
+        if: always()
+        uses: excelano/.github/.github/actions/mac-photograph@main
+        with:
+          if-no-files-found: ${{ inputs.photograph-if-no-files-found }}
+
+      # Whole files, because a debug artefact - a crash report, say - is cheap
+      # to keep and the alternative is asking whoever hit the failure to
+      # reproduce it.
+      - name: Keep extra debug artefacts
+        if: always() && inputs.keep-artifact-path != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.keep-artifact-name }}
+          path: ${{ runner.temp }}/${{ inputs.keep-artifact-path }}
+          if-no-files-found: ignore
+
+      # Built here and signed on the Mac lane: the Distribution certificate
+      # stays where it is. Up to three, because odox ships three applications
+      # from one workspace - building the whole workspace for the first
+      # makes the other two cache hits rather than full compiles.
+      - name: The release binary
+        if: inputs.binary-1 != '' && (github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.tag != ''))
+        uses: excelano/.github/.github/actions/mac-release-binary@main
+        with:
+          binary: ${{ inputs.binary-1 }}
+          package: ${{ inputs.package-1 }}
+          targets: ${{ inputs.targets-1 || 'x86_64-apple-darwin aarch64-apple-darwin' }}
+          tag: ${{ github.event.release.tag_name || inputs.tag }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: The release binary, second application
+        if: inputs.binary-2 != '' && (github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.tag != ''))
+        uses: excelano/.github/.github/actions/mac-release-binary@main
+        with:
+          binary: ${{ inputs.binary-2 }}
+          package: ${{ inputs.package-2 }}
+          targets: ${{ inputs.targets-2 || 'x86_64-apple-darwin aarch64-apple-darwin' }}
+          tag: ${{ github.event.release.tag_name || inputs.tag }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: The release binary, third application
+        if: inputs.binary-3 != '' && (github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.tag != ''))
+        uses: excelano/.github/.github/actions/mac-release-binary@main
+        with:
+          binary: ${{ inputs.binary-3 }}
+          package: ${{ inputs.package-3 }}
+          targets: ${{ inputs.targets-3 || 'x86_64-apple-darwin aarch64-apple-darwin' }}
+          tag: ${{ github.event.release.tag_name || inputs.tag }}
+          token: ${{ secrets.GITHUB_TOKEN }}

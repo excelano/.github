@@ -1,0 +1,142 @@
+name: msstore-submit
+
+# Microsoft Store submit, for the fleet: push listing text and release
+# notes, stage screenshots, upload the .msix, and submit for certification.
+# No certificate is used or needed — the Store signs what it distributes —
+# so this is CI's whole share of a Microsoft Store release.
+#
+# Gated by the `msstore-release` GitHub Environment's required-reviewer
+# approval, the native replacement for a terminal "submit for
+# certification?" prompt. That environment has to exist in the *calling*
+# repo (Settings → Environments) with at least one required reviewer
+# configured — this file only names it; the protection rule is repo
+# configuration, not something a workflow file can declare.
+#
+# One product per call, the same shape as appstore-prep.yml: a repo shipping
+# more than one application to the Store (odox) calls this once per Store
+# ID, from its own caller.
+#
+# workflow_call only, the same shape as deb.yml and windows-desktop-ci.yml:
+# the dispatch trigger belongs in each caller's own thin wrapper.
+#
+# Requires these secrets from the caller (secrets: inherit):
+#   MSSTORE_TENANT_ID
+#   MSSTORE_SELLER_ID
+#   MSSTORE_CLIENT_ID
+#   MSSTORE_CLIENT_SECRET
+#
+# Author: David M. Anderson
+# Built with AI assistance (Claude, Anthropic)
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: The release tag carrying the .msix to submit, e.g. v0.2.7.
+        required: true
+        type: string
+      store-id:
+        description: Partner Center's numeric Store ID for this product (identity.psd1's StoreId).
+        required: true
+        type: string
+      package-prefix:
+        description: >
+          The Application Id .msix files are named after (the part of
+          Package/Identity/Name after the publisher), for a repo with more
+          than one .msix on the release. Empty takes whichever .msix there
+          is, which is every repo but odox.
+        required: false
+        default: ''
+        type: string
+      listing-toml:
+        required: false
+        default: packaging/store-listing.toml
+        type: string
+      notes-toml:
+        required: false
+        default: packaging/release-notes.toml
+        type: string
+      product-key:
+        description: The [products.<key>] table, for a repo shipping more than one application.
+        required: false
+        default: ''
+        type: string
+      locales:
+        description: Space-separated locales in ship.conf's spelling, e.g. "en-us de-de".
+        required: true
+        type: string
+      screenshots-run-id:
+        description: >
+          The run ID of a windows-screenshots.yml dispatch to stage and
+          upload frames from - gh run list gives it, or the URL of that run.
+          Empty submits with the pictures the listing already has.
+        required: false
+        default: ''
+        type: string
+      dry-run:
+        description: Prepare and then discard rather than submit. Leaves a pre-existing draft untouched either way.
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  submit:
+    runs-on: ubuntu-latest
+    environment: msstore-release
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag }}
+
+      - name: The .msix this release carries, and the plain version number
+        id: asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          PREFIX: ${{ inputs.package-prefix }}
+        run: |
+          set -eu
+          mkdir -p /tmp/msstore-package
+          gh release download "$TAG" --dir /tmp/msstore-package --pattern '*.msix'
+          if [ -n "$PREFIX" ]; then
+            match=$(find /tmp/msstore-package -name "${PREFIX}-*.msix" | head -1)
+          else
+            match=$(find /tmp/msstore-package -name '*.msix' | head -1)
+          fi
+          [ -n "$match" ] || { echo "::error::no .msix on $TAG matching prefix '${PREFIX}'" >&2; exit 1; }
+          echo "path=$match" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      # windows-screenshots.yml is a separate, independently-dispatched run,
+      # so its artifact has to be fetched by run ID rather than found lying
+      # around - download-artifact only looks within the current run without
+      # one.
+      - name: The screenshots from that run, if any
+        if: inputs.screenshots-run-id != ''
+        uses: actions/download-artifact@v8
+        with:
+          name: store-screenshots
+          run-id: ${{ inputs.screenshots-run-id }}
+          github-token: ${{ github.token }}
+          path: /tmp/screenshots
+
+      - name: Microsoft Store submit
+        uses: excelano/.github/.github/actions/msstore-submit@main
+        with:
+          store-id: ${{ inputs.store-id }}
+          version: ${{ steps.asset.outputs.version }}
+          package: ${{ steps.asset.outputs.path }}
+          tenant-id: ${{ secrets.MSSTORE_TENANT_ID }}
+          seller-id: ${{ secrets.MSSTORE_SELLER_ID }}
+          client-id: ${{ secrets.MSSTORE_CLIENT_ID }}
+          client-secret: ${{ secrets.MSSTORE_CLIENT_SECRET }}
+          listing-toml: ${{ inputs.listing-toml }}
+          notes-toml: ${{ inputs.notes-toml }}
+          product-key: ${{ inputs.product-key }}
+          locales: ${{ inputs.locales }}
+          screenshots-dir: ${{ inputs.screenshots-run-id != '' && '/tmp/screenshots' || '' }}
+          dry-run: ${{ inputs.dry-run }}

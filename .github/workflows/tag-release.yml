@@ -1,0 +1,162 @@
+name: tag-release
+
+# Create the tag - and, depending on the repo, the GitHub release - once a
+# commit's checks are green. workflow_dispatch only: a human decides when to
+# tag, the same way they decide today. What's new is that this checks rather
+# than trusts: it refuses if the target commit's checks are not all green,
+# instead of tagging on faith.
+#
+# Simplified from the original design, which chained this off workflow_run
+# so tagging could fire automatically the moment checks passed. That fit the
+# CLI repos, which each run one check workflow - but the desktop repos ended
+# up with checks split across windows.yml/linux.yml/apple-silicon.yml/
+# publish-crate.yml independently, each triggered on its own, which was
+# never a deliberate design and isn't worth building workflow_run-chaining
+# machinery to accommodate. One mechanism, dispatched by a human, verifying
+# whatever checks exist on the commit via the API - same shape whether a
+# repo has one check workflow or four.
+#
+# Three shapes, because the fleet's release mechanics genuinely differ:
+#   draft    - cargo-dist's own release.yml expects a draft release to
+#              already exist for the tag (its own header says so) and
+#              undrafts it once it's built and attached artifacts. A
+#              published release here would fire release: published, which
+#              dist's repos don't trigger on and don't want firing.
+#   tag-only - goreleaser's own release.yml already creates its own release
+#              on push: tags. Creating one here too would collide with it,
+#              so this creates nothing but the tag.
+#   published - the desktop repos' whole per-platform CI
+#              (windows.yml/apple-silicon.yml/macos.yml/linux.yml) triggers
+#              on release: published, so publishing is what starts the
+#              chain that actually builds and attaches anything.
+#
+# Requires secrets.RELEASE_TOKEN from the caller (secrets: inherit) - a
+# classic PAT with repo + workflow scope, not yet created as an org secret.
+#
+# Author: David M. Anderson
+# Built with AI assistance (Claude, Anthropic)
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: 'Explicit tag, e.g. v1.2.3. Required for a repo with no manifest-path - Go has no version file to read.'
+        required: false
+        default: ''
+        type: string
+      manifest-path:
+        description: 'Cargo.toml to read the version from when tag is empty. Ignored if tag is set.'
+        required: false
+        default: ''
+        type: string
+      target:
+        description: 'Branch or SHA to tag.'
+        required: false
+        default: main
+        type: string
+      release-kind:
+        description: 'draft, tag-only or published - see the header above.'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.target }}
+          token: ${{ secrets.RELEASE_TOKEN }}
+
+      - name: The tag
+        id: tag
+        run: |
+          set -eu
+          tag="${{ inputs.tag }}"
+          if [ -z "$tag" ]; then
+            [ -n "${{ inputs.manifest-path }}" ] || {
+              echo "::error::neither tag nor manifest-path was given - nothing says what to tag" >&2
+              exit 1
+            }
+            version=$(sed -n 's/^version *= *"\([^"]*\)".*/\1/p' "${{ inputs.manifest-path }}" | head -1)
+            [ -n "$version" ] || {
+              echo "::error::no version = \"...\" line in ${{ inputs.manifest-path }}" >&2
+              exit 1
+            }
+            tag="v${version}"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      # Safe to run twice, the other direction: a tag that already exists is
+      # not re-created, so a repeat dispatch against the same version fails
+      # here with a clear reason rather than an opaque git error later.
+      - name: The tag does not already exist
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          if gh api "repos/${{ github.repository }}/git/ref/tags/${{ steps.tag.outputs.tag }}" >/dev/null 2>&1; then
+            echo "::error::${{ steps.tag.outputs.tag }} already exists" >&2
+            exit 1
+          fi
+
+      # The check-before-act this whole workflow exists for. Every check-run
+      # GitHub recorded against the target commit has to be a success -
+      # however many workflows that is, whatever repo this runs against.
+      - name: The target commit's checks are green
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          set -eu
+          sha=$(git rev-parse HEAD)
+          echo "checking ${sha}"
+          runs=$(gh api "repos/${{ github.repository }}/commits/${sha}/check-runs" --jq '.check_runs')
+          count=$(printf '%s' "$runs" | jq 'length')
+          if [ "$count" -eq 0 ]; then
+            echo "::error::no check-runs recorded for ${sha} yet - has CI run against it?" >&2
+            exit 1
+          fi
+          not_ready=$(printf '%s' "$runs" | jq -r '
+            .[] | select(.status != "completed" or (.conclusion != "success" and .conclusion != "skipped" and .conclusion != "neutral")) |
+            "\(.name): status=\(.status) conclusion=\(.conclusion // "null")"
+          ')
+          if [ -n "$not_ready" ]; then
+            echo "::error::not every check on ${sha} is green:" >&2
+            echo "$not_ready" >&2
+            exit 1
+          fi
+          echo "$count check(s) on ${sha}, all green"
+
+      - name: The tag, and nothing else
+        if: inputs.release-kind == 'tag-only'
+        run: |
+          git tag "${{ steps.tag.outputs.tag }}" HEAD
+          git push origin "${{ steps.tag.outputs.tag }}"
+
+      # A draft release does not create a real git tag ref until it's
+      # published - GitHub only records the intended tag name and target
+      # against the draft. cargo-dist's own release.yml triggers on
+      # push: tags, so without an explicit tag push here it would never
+      # fire. Order matters: the draft has to exist before the tag push
+      # reaches dist, since dist's own host job finds the release by tag
+      # name and uploads into it - so the draft is created first, then the
+      # tag that makes dist's trigger fire.
+      - name: The draft release
+        if: inputs.release-kind == 'draft'
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: gh release create "${{ steps.tag.outputs.tag }}" --target "${{ inputs.target }}" --draft --generate-notes
+
+      - name: The tag, so cargo-dist's own trigger fires
+        if: inputs.release-kind == 'draft'
+        run: |
+          git tag "${{ steps.tag.outputs.tag }}" HEAD
+          git push origin "${{ steps.tag.outputs.tag }}"
+
+      - name: The release
+        if: inputs.release-kind == 'published'
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: gh release create "${{ steps.tag.outputs.tag }}" --target "${{ inputs.target }}" --generate-notes

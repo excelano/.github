@@ -1,0 +1,70 @@
+name: winget-publish
+
+# Submit a release's Windows packages to microsoft/winget-pkgs via komac.
+# No certificate is used — komac authenticates with a classic PAT and opens
+# a pull request — so this is CI's whole share of a winget release.
+#
+# One call per repo, even for a repo shipping several packages (xfiles ships
+# five CLIs) — `entries` carries all of them, space-separated, the same
+# shape ship.conf's own `winget=` line already uses.
+#
+# workflow_call only, the same shape as deb.yml and appstore-prep.yml: the
+# dispatch trigger belongs in each caller's own thin wrapper.
+#
+# Requires these secrets from the caller (secrets: inherit):
+#   WINGET_KOMAC_TOKEN  - classic PAT, anderix account, public_repo scope only
+#   WINGET_SYNC_TOKEN   - classic PAT, anderix account, repo + workflow scope
+# Kept as two separate secrets on purpose - see winget-publish/action.yml.
+#
+# Author: David M. Anderson
+# Built with AI assistance (Claude, Anthropic)
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: The release tag these packages ship from, e.g. v1.2.3.
+        required: true
+        type: string
+      entries:
+        description: 'ship.conf''s `winget=` line verbatim: space-separated PackageID:asset1,asset2,... groups, <version> unsubstituted.'
+        required: true
+        type: string
+      privacy-url:
+        description: The PrivacyUrl every manifest from this repo carries - ship.conf's winget_privacy. Empty if the repo has none.
+        required: false
+        default: ''
+        type: string
+      dry-run:
+        description: Generate and inspect manifests, open no pull request.
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag }}
+
+      - name: The plain version number
+        id: version
+        run: echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+        env:
+          TAG: ${{ inputs.tag }}
+
+      - name: winget publish
+        uses: excelano/.github/.github/actions/winget-publish@main
+        with:
+          entries: ${{ inputs.entries }}
+          version: ${{ steps.version.outputs.version }}
+          slug: ${{ github.repository }}
+          privacy-url: ${{ inputs.privacy-url }}
+          komac-token: ${{ secrets.WINGET_KOMAC_TOKEN }}
+          sync-token: ${{ secrets.WINGET_SYNC_TOKEN }}
+          dry-run: ${{ inputs.dry-run }}

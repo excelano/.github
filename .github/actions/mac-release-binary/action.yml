@@ -97,8 +97,31 @@ runs:
         lipo -info "$asset"
         echo "asset=${asset}" >> "$GITHUB_OUTPUT"
 
+    # Safe to run twice: a rebuild that produced the same bytes as what's
+    # already attached is a no-op success, not a --clobber overwrite of an
+    # asset the Mac lane may already have picked up. A rebuild that produced
+    # different bytes is refused rather than silently replacing it - the same
+    # reasoning and shape as linux-attach-release-packages, which had the
+    # identical --clobber problem on the Linux side.
     - name: Attach it to the release
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.token }}
-      run: gh release upload "${{ inputs.tag }}" "${{ steps.build.outputs.asset }}" --clobber
+        TAG: ${{ inputs.tag }}
+        ASSET: ${{ steps.build.outputs.asset }}
+      run: |
+        set -eu
+        if ! gh release view "$TAG" --json assets --jq '.assets[].name' | grep -qxF "$ASSET"; then
+          gh release upload "$TAG" "$ASSET"
+          echo "$ASSET: attached"
+          exit 0
+        fi
+        have=$(mktemp -d)
+        gh release download "$TAG" --pattern "$ASSET" --dir "$have"
+        if cmp -s "$ASSET" "$have/$ASSET"; then
+          echo "$ASSET: already attached, byte-identical, skipping"
+        else
+          echo "::error::$ASSET is already attached to $TAG with different content - refusing to replace a binary the Mac lane may already have picked up. If replacing it is really intended, remove it first: gh release delete-asset $TAG $ASSET" >&2
+          exit 1
+        fi
+        rm -rf "$have"

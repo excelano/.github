@@ -12,6 +12,14 @@ runs:
         path: packages
         merge-multiple: true
 
+    # Safe to run twice: a package this run built and a package already on
+    # the release are compared by content, not just by name. The same build
+    # re-attached is a no-op success - the point of "safe to run twice" is
+    # that nobody has to remember dry_run just to re-exercise a build against
+    # a tag that already shipped. A *different* build under the same
+    # filename is refused rather than silently replacing what may already be
+    # installed; that's a real conflict, and `gh release delete-asset` is the
+    # deliberate way past it, not a flag on this action.
     - name: Attach the packages to the release
       shell: bash
       env:
@@ -21,4 +29,21 @@ runs:
       run: |
         set -eu
         ls -l packages
-        gh release upload "$TAG" packages/*.deb --clobber
+        existing=$(gh release view "$TAG" --json assets --jq '.assets[].name')
+        for deb in packages/*.deb; do
+          name=$(basename "$deb")
+          if ! grep -qxF "$name" <<<"$existing"; then
+            gh release upload "$TAG" "$deb"
+            echo "$name: attached"
+            continue
+          fi
+          have=$(mktemp -d)
+          gh release download "$TAG" --pattern "$name" --dir "$have"
+          if cmp -s "$deb" "$have/$name"; then
+            echo "$name: already attached, byte-identical, skipping"
+          else
+            echo "::error::$name is already attached to $TAG with different content - refusing to replace a package someone may have installed. If replacing it is really intended, remove it first: gh release delete-asset $TAG $name" >&2
+            exit 1
+          fi
+          rm -rf "$have"
+        done

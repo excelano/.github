@@ -1,0 +1,55 @@
+name: winget publish
+description: Submit a release's Windows packages to microsoft/winget-pkgs via komac.
+inputs:
+  entries:
+    description: 'The ship.conf `winget=` line verbatim: space-separated PackageID:asset1,asset2,... groups, with <version> unsubstituted.'
+    required: true
+  version:
+    description: 'The release version, without a leading v (e.g. 1.2.3).'
+    required: true
+  slug:
+    description: 'owner/repo, for building the release download URLs.'
+    required: true
+  privacy-url:
+    description: 'The PrivacyUrl every manifest from this repo carries - ship.conf''s winget_privacy. Empty if the repo has none.'
+    required: false
+    default: ''
+  komac-token:
+    description: 'Classic PAT for the anderix account, public_repo scope only - what komac itself uses to write manifests and open the PR.'
+    required: true
+  sync-token:
+    description: 'Classic PAT for the anderix account, repo + workflow scope - what `gh repo sync anderix/winget-pkgs` uses. Kept separate from komac-token on purpose (~/notes/build_release_gotchas.md): workflow scope lets a token rewrite Actions files, and that stays off the token komac holds.'
+    required: true
+  dry-run:
+    description: 'Generate and inspect manifests, submit nothing.'
+    required: false
+    default: 'false'
+runs:
+  using: composite
+  steps:
+    - name: Install komac
+      shell: bash
+      run: |
+        set -euo pipefail
+        gh release download --repo russellbanks/Komac --pattern '*x86_64-unknown-linux-gnu*' --dir /tmp/komac-install
+        archive=$(ls /tmp/komac-install/*)
+        case "$archive" in
+          *.tar.gz) tar -xzf "$archive" -C /tmp/komac-install ;;
+          *) echo "unrecognized komac release asset: $archive" >&2; exit 1 ;;
+        esac
+        install -m 0755 "$(find /tmp/komac-install -type f -name komac)" /usr/local/bin/komac
+        komac --version
+      env:
+        GH_TOKEN: ${{ github.token }}
+
+    - name: Submit to winget-pkgs
+      shell: bash
+      run: "${{ github.action_path }}/winget_publish.sh"
+      env:
+        ENTRIES: ${{ inputs.entries }}
+        VERSION: ${{ inputs.version }}
+        SLUG: ${{ inputs.slug }}
+        PRIVACY_URL: ${{ inputs.privacy-url }}
+        DRY_RUN: ${{ inputs.dry-run }}
+        GITHUB_TOKEN: ${{ inputs.komac-token }}
+        GH_TOKEN: ${{ inputs.sync-token }}

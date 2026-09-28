@@ -1,0 +1,104 @@
+name: mac-screenshots
+
+# On-demand Store screenshots for a Mac desktop app, split out of
+# mac-desktop-ci.yml (Phase C removed screenshots from that file rather than
+# half-migrate them) so a screenshot dispatch doesn't drag in the test suite,
+# clippy, or the window-opens-a-document check - none of that is needed to
+# photograph a release build. dispatch-only: no push, pull_request or release
+# trigger belongs here, and no tag to attach anything to.
+#
+# The frames are of a release build, always - not the debug build the CI
+# lane already has lying around, since that lane no longer runs in the same
+# job. duckling's own original reasoning ("a debug one converts a scanned PDF
+# slowly enough that the batch is still running when the shutter goes")
+# generalizes: a release build is what should be photographed everywhere,
+# not just where slowness forced the question.
+#
+# Bundle assembly is per-repo, same reasoning as mac-desktop-ci.yml's
+# bundle-script: five repos assemble five different bundles (odox picks one
+# of three), and two need a demo document or container built first.
+# pre-shot-script is the whole thing, run inline.
+#
+# Author: David M. Anderson
+# Built with AI assistance (Claude, Anthropic)
+
+on:
+  workflow_call:
+    inputs:
+      deployment-target:
+        description: 'MACOSX_DEPLOYMENT_TARGET for every step in this job. Empty uses the runner default.'
+        required: false
+        default: ''
+        type: string
+      extra-cache-paths:
+        description: 'Newline-separated paths to cache independently of the Rust build cache. Empty skips the step.'
+        required: false
+        default: ''
+        type: string
+      extra-cache-key-file:
+        required: false
+        default: ''
+        type: string
+      extra-cache-fetch-script:
+        description: 'Bash run to populate extra-cache-paths after the cache is restored - expected to be idempotent.'
+        required: false
+        default: ''
+        type: string
+      pre-shot-script:
+        description: 'Bash: build the release binary, assemble the bundle, and anything else needed before it can be photographed (a demo document, a container).'
+        required: true
+        type: string
+      app-path:
+        description: 'The .app bundle pre-shot-script assembled, for mac-store-screenshots to open.'
+        required: true
+        type: string
+      mode:
+        description: 'reference takes one plain frame; full takes the set.'
+        required: true
+        type: string
+      languages:
+        required: false
+        default: 'en de'
+        type: string
+      shot-args:
+        required: false
+        default: ''
+        type: string
+
+jobs:
+  screenshots:
+    runs-on: macos-15
+    env:
+      MACOSX_DEPLOYMENT_TARGET: ${{ inputs.deployment-target }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: The runner is Apple silicon
+        uses: excelano/.github/.github/actions/mac-arch-check@main
+
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: A cache for what does not change with the code
+        if: inputs.extra-cache-fetch-script != ''
+        uses: actions/cache@v6
+        with:
+          path: ${{ inputs.extra-cache-paths }}
+          key: extra-${{ runner.os }}-${{ hashFiles(inputs.extra-cache-key-file) }}
+
+      - name: Fetch what that cache holds
+        if: inputs.extra-cache-fetch-script != ''
+        run: ${{ inputs.extra-cache-fetch-script }}
+
+      - name: The bundle these screenshots are of
+        run: ${{ inputs.pre-shot-script }}
+
+      - name: The Store screenshots
+        uses: excelano/.github/.github/actions/mac-store-screenshots@main
+        with:
+          app: ${{ inputs.app-path }}
+          mode: ${{ inputs.mode }}
+          languages: ${{ inputs.languages }}
+          args: ${{ inputs.shot-args }}

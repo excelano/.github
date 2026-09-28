@@ -1,0 +1,112 @@
+# Push listing text and release notes, stage screenshots, upload the .msix,
+# and submit it for certification. No certificate is used or needed — the
+# Store signs what it distributes — so this is CI's whole share of a
+# Microsoft Store release.
+#
+# The submission sequence this drives (msstore_submit.py, beside this file)
+# is ported from excelano/ship's internal/store package's debugged
+# behavior, not designed fresh — see that script's own header.
+#
+# Author: David M. Anderson
+# Built with AI assistance (Claude, Anthropic)
+
+name: Microsoft Store submit
+description: Push listing text and notes, stage screenshots, upload the package, submit for certification.
+
+inputs:
+  store-id:
+    description: Partner Center's numeric Store ID for this product (identity.psd1's StoreId).
+    required: true
+  version:
+    description: The version being released, e.g. 1.2.3 (no leading v).
+    required: true
+  package:
+    description: Path to the .msix already fetched to disk.
+    required: true
+  tenant-id:
+    required: true
+  seller-id:
+    required: true
+  client-id:
+    required: true
+  client-secret:
+    required: true
+  listing-toml:
+    required: false
+    default: packaging/store-listing.toml
+  notes-toml:
+    required: false
+    default: packaging/release-notes.toml
+  product-key:
+    description: The [products.<key>] table, for a repo shipping more than one application.
+    required: false
+    default: ''
+  locales:
+    description: Space-separated locales in ship.conf's spelling, e.g. "en-us de-de".
+    required: true
+  screenshots-dir:
+    description: >
+      A directory of <Apple-tag>/<NN-name>.png frames to stage and upload,
+      from an on-demand screenshots run. Empty submits with the pictures
+      the listing already has.
+    required: false
+    default: ''
+  dry-run:
+    description: Prepare and then discard rather than submit. Leaves a pre-existing draft untouched either way.
+    required: false
+    default: 'false'
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '9.0.x'
+
+    - name: The Microsoft Store Developer CLI
+      shell: bash
+      run: |
+        dotnet tool install --global MSStore.CLI
+        echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
+
+    - name: Credentials
+      shell: bash
+      env:
+        TENANT_ID: ${{ inputs.tenant-id }}
+        SELLER_ID: ${{ inputs.seller-id }}
+        CLIENT_ID: ${{ inputs.client-id }}
+        CLIENT_SECRET: ${{ inputs.client-secret }}
+      run: |
+        export PATH="$HOME/.dotnet/tools:$PATH"
+        msstore reconfigure --tenantId "$TENANT_ID" --sellerId "$SELLER_ID" \
+          --clientId "$CLIENT_ID" --clientSecret "$CLIENT_SECRET"
+
+    - name: Microsoft Store submit
+      shell: bash
+      env:
+        STORE_ID: ${{ inputs.store-id }}
+        VERSION: ${{ inputs.version }}
+        PACKAGE: ${{ inputs.package }}
+        LISTING_TOML: ${{ inputs.listing-toml }}
+        NOTES_TOML: ${{ inputs.notes-toml }}
+        PRODUCT_KEY: ${{ inputs.product-key }}
+        LOCALES: ${{ inputs.locales }}
+        SHOTS_DIR: ${{ inputs.screenshots-dir }}
+        DRY_RUN: ${{ inputs.dry-run }}
+      run: |
+        set -eu
+        export PATH="$HOME/.dotnet/tools:$PATH"
+
+        args=(
+          --store-id "$STORE_ID"
+          --version "$VERSION"
+          --package "$PACKAGE"
+          --listing-toml "$LISTING_TOML"
+          --notes-toml "$NOTES_TOML"
+          --locales "$LOCALES"
+        )
+        [ -z "$PRODUCT_KEY" ] || args+=(--product-key "$PRODUCT_KEY")
+        [ -z "$SHOTS_DIR" ] || args+=(--screenshots-dir "$SHOTS_DIR")
+        [ "$DRY_RUN" != "true" ] || args+=(--dry-run)
+
+        python3 "${{ github.action_path }}/msstore_submit.py" "${args[@]}"

@@ -49,7 +49,7 @@ on:
         default: ''
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
@@ -116,6 +116,19 @@ jobs:
           package=$(ls target/debian/*.deb)
           test "$(dpkg-deb -f "$package" Architecture)" = "${{ matrix.arch }}"
 
+      # Ownership, modes, and that md5sums is present and correct - the same
+      # check every desktop repo's linux.yml already runs. deb.yml predates
+      # this composite action (added 9b494f1, long after deb.yml existed)
+      # and was simply never updated to use it - not a deliberate omission,
+      # confirmed by checking history before adding it here.
+      - uses: excelano/.github/.github/actions/linux-package-integrity-check@main
+        with:
+          deb-glob: target/debian/*.deb
+
+      - uses: excelano/.github/.github/actions/linux-lintian-check@main
+        with:
+          deb-glob: target/debian/*.deb
+
       # The step this workflow exists for. Until 2026-09-09 every arm64 package
       # the fleet published was compiled here and shipped without anything
       # running it once: this job built it and uploaded it, CI ran on amd64
@@ -139,26 +152,35 @@ jobs:
         if: ${{ inputs.fleet_apt }}
         run: curl -fsSL https://excelano.com/apt/setup.sh | sudo sh
 
-      - name: The package installs and the commands run
-        run: |
-          set -eux
-          package=$(ls target/debian/*.deb)
-          sudo apt-get update
-          sudo apt-get install -y "./${package#./}"
-          for c in ${{ steps.what.outputs.commands }}; do
-              command -v "$c"
-              "$c" --version
-          done
+      - name: apt-get update
+        run: sudo apt-get update
 
-      # Without this the only way to find out whether any of the above works is
-      # to cut a release and watch. There is no --clobber below on purpose —
-      # a package already on a release is one somebody may have installed, and
-      # the spent-tag rule in ~/notes/releasing.md says what replacing it costs
-      # — so a dispatch against a shipped release would fail at the upload
-      # having proved everything before it. This skips that last step and lets
-      # the rest be exercised for free.
-      - name: Upload to the release
-        if: ${{ !inputs.dry_run }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ inputs.tag }}" target/debian/*.deb
+      - uses: excelano/.github/.github/actions/linux-install-check@main
+        with:
+          deb-glob: target/debian/*.deb
+          binaries: ${{ steps.what.outputs.commands }}
+
+      # The build leaves this job here; whether it goes any further is the
+      # attach job below, which is where dry_run and the idempotency check
+      # both live now.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: deb-${{ matrix.arch }}
+          path: target/debian/*.deb
+
+  # Only real work when dry_run is false. Separated from the build matrix so
+  # both architectures' packages are attached together rather than racing
+  # each other's `gh release upload` calls, and so the idempotency check
+  # (safe to run twice: skip a byte-identical re-attach, refuse a differing
+  # one) lives in one place - the same composite action the desktop repos'
+  # linux.yml already calls.
+  attach:
+    needs: build
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: excelano/.github/.github/actions/linux-attach-release-packages@main
+        with:
+          tag: ${{ inputs.tag }}

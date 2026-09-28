@@ -1,0 +1,103 @@
+# Open or reuse the Mac App Store version record, push the listing text and
+# release notes, and confirm (optionally place) screenshots. No certificate,
+# no signing, no submission — those need the Mac and stay local; this is
+# everything App Store Connect will do over plain HTTPS.
+#
+# The API sequence this drives (appstore_prep.py, beside this file) is
+# ported from excelano/ship's internal/appstore package's debugged behavior,
+# not designed fresh — see that script's own header.
+#
+# Author: David M. Anderson
+# Built with AI assistance (Claude, Anthropic)
+
+name: App Store Connect prep
+description: Open/reuse the version, push listing text and notes, confirm and optionally place screenshots.
+
+inputs:
+  bundle-id:
+    description: The CFBundleIdentifier App Store Connect knows this application by.
+    required: true
+  version:
+    description: The version being released, e.g. 1.2.3 (no leading v).
+    required: true
+  key-id:
+    description: App Store Connect API key id (the ten characters in the .p8 file name).
+    required: true
+  issuer-id:
+    description: App Store Connect API issuer id, from Users and Access, Integrations, Team Keys.
+    required: true
+  private-key:
+    description: The .p8 private key's contents. Pass a secret, never a literal.
+    required: true
+  listing-toml:
+    description: Path to the repo's listing copy.
+    required: false
+    default: packaging/store-listing.toml
+  notes-toml:
+    description: Path to the repo's release notes for this version.
+    required: false
+    default: packaging/release-notes.toml
+  product-key:
+    description: >
+      The [products.<key>] table in listing-toml/notes-toml, for a repo
+      shipping more than one application (odox: xodt, xods, xodp). Empty
+      for a repo with one, which keys both files at the top level.
+    required: false
+    default: ''
+  locales:
+    description: Space-separated locales in ship.conf's spelling, e.g. "en-us de-de".
+    required: true
+  screenshots-dir:
+    description: >
+      A directory of <Apple-tag>/<NN-name>.png frames to place, from an
+      on-demand screenshots run. Empty confirms existing coverage only and
+      places nothing new.
+    required: false
+    default: ''
+  dry-run:
+    description: Report what would happen; write nothing.
+    required: false
+    default: 'false'
+
+runs:
+  using: composite
+  steps:
+    - name: Python, and the two libraries ES256 needs
+      shell: bash
+      run: pip install --quiet pyjwt cryptography
+
+    - name: App Store Connect prep
+      shell: bash
+      env:
+        BUNDLE_ID: ${{ inputs.bundle-id }}
+        VERSION: ${{ inputs.version }}
+        KEY_ID: ${{ inputs.key-id }}
+        ISSUER_ID: ${{ inputs.issuer-id }}
+        PRIVATE_KEY: ${{ inputs.private-key }}
+        LISTING_TOML: ${{ inputs.listing-toml }}
+        NOTES_TOML: ${{ inputs.notes-toml }}
+        PRODUCT_KEY: ${{ inputs.product-key }}
+        LOCALES: ${{ inputs.locales }}
+        SHOTS_DIR: ${{ inputs.screenshots-dir }}
+        DRY_RUN: ${{ inputs.dry-run }}
+      run: |
+        set -eu
+        key_file=$(mktemp)
+        trap 'rm -f "$key_file"' EXIT
+        printf '%s' "$PRIVATE_KEY" > "$key_file"
+
+        args=(
+          --bundle-id "$BUNDLE_ID"
+          --version "$VERSION"
+          --key-id "$KEY_ID"
+          --issuer-id "$ISSUER_ID"
+          --private-key-file "$key_file"
+          --listing-toml "$LISTING_TOML"
+          --notes-toml "$NOTES_TOML"
+          --locales "$LOCALES"
+        )
+        [ -z "$PRODUCT_KEY" ] || args+=(--product-key "$PRODUCT_KEY")
+        [ -z "$SHOTS_DIR" ] || args+=(--screenshots-dir "$SHOTS_DIR")
+        [ "$DRY_RUN" != "true" ] || args+=(--dry-run)
+
+        python3 "${{ github.action_path }}/appstore_prep.py" "${args[@]}"
