@@ -59,15 +59,12 @@ inputs:
 runs:
   using: composite
   steps:
-    - uses: actions/setup-dotnet@v4
-      with:
-        dotnet-version: '9.0.x'
-
+    # Not a dotnet tool - there is no MSStore.CLI package on NuGet (the tool
+    # is distributed as GitHub release tarballs, winget or brew, per its own
+    # install docs). Microsoft's own documented GitHub Actions install path
+    # is this action, which puts `msstore` on PATH directly.
     - name: The Microsoft Store Developer CLI
-      shell: bash
-      run: |
-        dotnet tool install --global MSStore.CLI
-        echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
+      uses: microsoft/microsoft-store-apppublisher@v1
 
     - name: Credentials
       shell: bash
@@ -77,7 +74,6 @@ runs:
         CLIENT_ID: ${{ inputs.client-id }}
         CLIENT_SECRET: ${{ inputs.client-secret }}
       run: |
-        export PATH="$HOME/.dotnet/tools:$PATH"
         msstore reconfigure --tenantId "$TENANT_ID" --sellerId "$SELLER_ID" \
           --clientId "$CLIENT_ID" --clientSecret "$CLIENT_SECRET"
 
@@ -95,7 +91,6 @@ runs:
         DRY_RUN: ${{ inputs.dry-run }}
       run: |
         set -eu
-        export PATH="$HOME/.dotnet/tools:$PATH"
 
         args=(
           --store-id "$STORE_ID"

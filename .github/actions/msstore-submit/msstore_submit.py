@@ -90,7 +90,7 @@ def run_cli(*args: str, check_output=True) -> str:
 def cli_ready() -> None:
     if subprocess.run(["which", CLI], capture_output=True).returncode != 0:
         refuse(f"no {CLI} on PATH; install the Microsoft Store Developer CLI first "
-               "(dotnet tool install --global MSStore.CLI)")
+               "(microsoft/microsoft-store-apppublisher, or msstore-cli via winget/brew)")
     try:
         run_cli("info")
     except RuntimeError as e:
