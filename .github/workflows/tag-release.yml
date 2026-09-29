@@ -106,11 +106,16 @@ jobs:
       # GitHub recorded against the target commit has to be a success -
       # however many workflows that is, whatever repo this runs against.
       #
-      # This job's own check-run is excluded: when target is the same commit
-      # this workflow is running against (the normal case - main), GitHub
-      # records this very job as a check-run on that SHA too, and it is still
-      # in_progress while this step runs - checking "every" check-run would
-      # make this job wait on itself forever.
+      # This job's own check-runs are excluded, from every dispatch attempt,
+      # not just this one: when target is the same commit this workflow is
+      # running against (the normal case - main), GitHub records this very
+      # job as a check-run on that SHA, and the target commit never changes
+      # between retries - so a prior failed attempt's own check-run (a real
+      # "failure", from tagging having refused last time) would otherwise
+      # sit on the commit forever and make this job refuse itself. Matched
+      # by job identity (the last "/ <job id>" segment of the check-run
+      # name, which this reusable job always publishes as "tag" - see
+      # `jobs: tag:` below), not by run id, so it excludes every attempt.
       - name: The target commit's checks are green
         env:
           GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
@@ -119,8 +124,8 @@ jobs:
           sha=$(git rev-parse HEAD)
           echo "checking ${sha}"
           runs=$(gh api "repos/${{ github.repository }}/commits/${sha}/check-runs" --jq '.check_runs')
-          self_run_id="${{ github.run_id }}"
-          runs=$(printf '%s' "$runs" | jq --arg self "/runs/${self_run_id}/job/" '[.[] | select((.details_url // "") | contains($self) | not)]')
+          self_job="${{ github.job }}"
+          runs=$(printf '%s' "$runs" | jq --arg self "$self_job" '[.[] | select((.name | split(" / ") | last) != $self)]')
           count=$(printf '%s' "$runs" | jq 'length')
           if [ "$count" -eq 0 ]; then
             echo "::error::no check-runs recorded for ${sha} yet - has CI run against it?" >&2
