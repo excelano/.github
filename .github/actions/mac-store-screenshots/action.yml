@@ -80,8 +80,7 @@ runs:
     # A hosted macOS runner comes up at 1024x768, which cannot hold the
     # 1440x900 window App Store Connect asks for. System Events clamps the
     # resize to what fits, the driver reads the frame back at 924x668 and
-    # refuses, and the refusal says nothing about the desktop. Measured
-    # 2026-09-17 on macos-15, taking Slipcase Desktop's first set.
+    # refuses, and the refusal says nothing about the desktop.
     #
     # `displayplacer` is not on the image and comes from Homebrew, which is.
     # The mode is chosen from what the display actually offers rather than
