@@ -26,13 +26,9 @@ name: windows-desktop-ci
 # difference between these products and stays a difference here rather than
 # being forced into one shape.
 #
-# Screenshots are not here at all - they moved to each repo's own
-# screenshots.yml, calling windows-screenshots.yml, so a screenshot dispatch
-# doesn't drag in the DLL check, the icon check or the Store package, none of
-# which it needs. That conflation is what this file used to have and
-# FIX-CI.md flags directly.
-#
-# See ~/notes/dry_boundary.md for why this lives here instead of in each repo.
+# Screenshots are not here: the shots-* apps in excelano/shipping take them,
+# so a screenshot run never drags in the DLL check, the icon check or the
+# Store package.
 #
 # Author: David M. Anderson
 # Built with AI assistance (Claude, Anthropic)
