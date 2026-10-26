@@ -31,7 +31,7 @@ name: tag-release
 #              chain that actually builds and attaches anything.
 #
 # Requires secrets.RELEASE_TOKEN from the caller (secrets: inherit) - a
-# classic PAT with repo + workflow scope, not yet created as an org secret.
+# classic PAT with repo + workflow scope, held as an org secret.
 #
 # Author: David M. Anderson
 # Built with AI assistance (Claude, Anthropic)

@@ -1,7 +1,7 @@
 # excelano/.github
 
-Org-wide defaults for the excelano repos. Right now that means reusable CI
-workflows: the policy lives here once, and each repo calls it instead of
+Org-wide defaults for the excelano repos: reusable CI workflows and composite
+actions. The policy lives here once, and each repo calls it instead of
 carrying its own copy.
 
 ## Calling a workflow
@@ -12,18 +12,16 @@ A consumer repo's `.github/workflows/ci.yml` is a few lines:
 name: ci
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+  workflow_dispatch:
 
 jobs:
   ci:
     uses: excelano/.github/.github/workflows/go-ci.yml@main
 ```
 
-The trigger stays in the caller, because when a repo builds is the caller's
-business; what a build checks is the fleet's. Pass `with:` inputs for the few
+The trigger stays in the caller, and it is `workflow_dispatch`: a run happens
+when a person asks for one, before a release or after a change worth testing.
+What a build checks is the fleet's business. Pass `with:` inputs for the few
 things a repo may legitimately differ on — the Go workflow accepts
 `go-version`, which defaults to stable.
 
@@ -45,19 +43,8 @@ instead:
           associations: '[{"extension": ".dclx", "progId": "Excelano.Segler.Archive"}]'
 ```
 
-| Action | What it does |
-| --- | --- |
-| `windows-install-check` | Runs the Windows install scripts against the registry and reads back: what goes on comes off, a `UserChoice` naming this application goes with it, and another application's does not |
-| `store-package` | Builds the unsigned MSIX the Store takes, keeps it, and attaches it to the release when there is a tag |
-| `mac-release-binary` | Builds the universal binary at the floor the Info.plist declares, checks every slice is present, and attaches it for the Mac to sign |
-| `powershell-parses` | Parses every `.ps1` under a path and fails on one that will not, naming the file and the line |
-| `store-screenshots` | Raises the runner's desktop, runs `packaging/windows/shots.ps1`, and uploads what it wrote |
-| `mac-store-screenshots` | Runs `packaging/macos/shots.sh` once per language and uploads what it wrote |
-
-Each of these was the same steps in three or more repos, or — which turned out
-to matter more — was in three and missing from three, and the version that was
-missing is the one that would have caught something. `windows-install-check`
-found the same class of defect in four uninstallers on the day it was shared.
+The actions live under `.github/actions/`, one directory each, and every
+`action.yml` opens with a `description` saying what it does and what it takes.
 
 What stays in the caller is what genuinely differs. Neither screenshot action
 installs an association, builds a release or makes a demo container, because
@@ -86,4 +73,4 @@ GitHub will also serve org-wide community health files from this repo —
 own. The security policies are deliberately not consolidated that way: they
 differ per tool in exactly the lines that matter, describing what that binary
 can reach and what it stores, and an org-wide default would replace the useful
-part with boilerplate. The reasoning is written down in `~/notes/dry_boundary.md`.
+part with boilerplate.

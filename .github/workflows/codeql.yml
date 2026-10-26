@@ -21,6 +21,10 @@ name: codeql
 #
 # The caller keeps two things: when to run, and what to scan. Everything about
 # how to scan it is fleet policy and lives here.
+#
+# Author: David M. Anderson
+# Built with AI assistance (Claude, Anthropic)
+
 on:
   workflow_call:
     inputs:

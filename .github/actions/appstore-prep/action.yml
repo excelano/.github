@@ -45,7 +45,7 @@ inputs:
     required: false
     default: ''
   locales:
-    description: Space-separated locales in ship.conf's spelling, e.g. "en-us de-de".
+    description: Space-separated locales as store-listing.toml's [locales] keys spell them, e.g. "en-us de-de".
     required: true
   screenshots-dir:
     description: >

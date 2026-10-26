@@ -20,6 +20,10 @@ name: go-lib-ci
 #   took the declaration at its word. The floor job reads the version from
 #   go.mod rather than naming one, so raising the promise is a one-line edit in
 #   the module and CI follows.
+#
+# Author: David M. Anderson
+# Built with AI assistance (Claude, Anthropic)
+
 on:
   workflow_call:
     inputs:

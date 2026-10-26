@@ -24,6 +24,10 @@ name: rust-lib-ci
 #   binary that failure costs a re-run; for a library it is the entire release,
 #   and it would otherwise surface in publish-crate.yml after the tag was
 #   pushed — and a pushed tag is spent.
+#
+# Author: David M. Anderson
+# Built with AI assistance (Claude, Anthropic)
+
 on:
   workflow_call:
     inputs:

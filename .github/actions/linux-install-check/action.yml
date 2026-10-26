@@ -1,3 +1,6 @@
+# Author: David M. Anderson
+# Built with AI assistance (Claude, Anthropic)
+
 name: Linux install check
 description: Install the package(s) and confirm each executable loads - the loader accepts it and everything it links resolves - read from how it fails, since nothing headless reaches a window.
 inputs:

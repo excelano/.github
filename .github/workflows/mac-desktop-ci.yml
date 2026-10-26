@@ -33,6 +33,9 @@ name: mac-desktop-ci
 # screenshots` in the workflow that also builds and tests - the same
 # conflation FIX-CI.md flags in windows-desktop-ci.yml's current shape and
 # this file was written to avoid from the start.
+#
+# Author: David M. Anderson
+# Built with AI assistance (Claude, Anthropic)
 
 on:
   workflow_call:

@@ -33,6 +33,9 @@ name: windows-desktop-ci
 # FIX-CI.md flags directly.
 #
 # See ~/notes/dry_boundary.md for why this lives here instead of in each repo.
+#
+# Author: David M. Anderson
+# Built with AI assistance (Claude, Anthropic)
 
 on:
   workflow_call:

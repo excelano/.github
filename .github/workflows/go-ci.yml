@@ -15,6 +15,10 @@ name: go-ci
 #
 # It lives here because eight repos needed the identical file, and eight copies
 # of one policy are eight chances to be wrong about it. See ~/notes/dry_boundary.md.
+#
+# Author: David M. Anderson
+# Built with AI assistance (Claude, Anthropic)
+
 on:
   workflow_call:
     inputs:

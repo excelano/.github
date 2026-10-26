@@ -18,6 +18,10 @@ name: rust-ci
 # green checkmark.
 #
 # See ~/notes/dry_boundary.md for why this lives here instead of in each repo.
+#
+# Author: David M. Anderson
+# Built with AI assistance (Claude, Anthropic)
+
 on:
   workflow_call:
     inputs:

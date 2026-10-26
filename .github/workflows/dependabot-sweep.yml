@@ -18,6 +18,9 @@ name: dependabot-sweep
 # `GITHUB_TOKEN` cannot do this job: it reaches only the repository it runs in,
 # and a merge it pushes starts no workflow, so `main` would quietly stop being
 # built.
+#
+# Author: David M. Anderson
+# Built with AI assistance (Claude, Anthropic)
 
 on:
   schedule:
