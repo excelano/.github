@@ -33,6 +33,13 @@ on:
         required: false
         default: stable
         type: string
+      apt-packages:
+        description: >-
+          Space-separated Debian packages the build needs from the runner, such
+          as a -dev package a crate's build script finds through pkg-config.
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read
@@ -67,6 +74,12 @@ jobs:
             echo "::error::a release document, changelog or preflight script; ship is the procedure. Delete it."
             exit 1
           fi
+
+      - name: Install system packages
+        if: inputs.apt-packages != ''
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ${{ inputs.apt-packages }}
 
       - name: Install Rust
         run: >-
