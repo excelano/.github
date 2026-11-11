@@ -44,24 +44,19 @@ instead:
 ```
 
 The actions live under `.github/actions/`, one directory each, and every
-`action.yml` opens with a `description` saying what it does and what it takes.
+`action.yml` carries a `description` saying what it does and what it takes.
 
-What stays in the caller is what genuinely differs. Neither screenshot action
-installs an association, builds a release or makes a demo container, because
-which of those a repo needs is the repo's business; each starts at the point
-where there is something worth photographing.
-
-The two are separate rather than one action with a runner switch, because
-almost nothing about them is shared: one raises a desktop resolution through a
-Windows cmdlet and the other satisfies a macOS privacy gate, and a single file
-carrying both would be two scripts under one name.
+What stays in the caller is what genuinely differs. `mac-photograph` installs no
+association, builds no release and makes no demo container, because which of
+those a repo needs is the repo's business; it starts at the point where there is
+something worth photographing.
 
 ## Why one host per org
 
 The anderix repos call `anderix/.github` instead of this repo, even for an
-identical workflow. Tools under anderix may not depend on excelano; two copies
-of a policy across two orgs is a boundary worth keeping, and it is not the
-nineteen copies this repo exists to prevent.
+identical workflow. Tools under anderix may not depend on excelano, so each org
+holds its own copy of the policy; that is a boundary, not the per-repo copying
+this repo exists to prevent.
 
 This repo must stay public. A private one cannot serve reusable workflows to
 public callers.
@@ -72,11 +67,11 @@ public callers.
 follows. GitHub links it from any repo without a `CONTRIBUTING.md` of its own,
 so no repo carries a copy.
 
-## What does not belong here
+## Community health files
 
-GitHub will also serve org-wide community health files from this repo —
-`SECURITY.md`, `CONTRIBUTING.md`, issue templates — to any repo that lacks its
-own. The security policies are deliberately not consolidated that way: they
-differ per tool in exactly the lines that matter, describing what that binary
-can reach and what it stores, and an org-wide default would replace the useful
-part with boilerplate.
+GitHub serves org-wide community health files from this repo to any repo that
+lacks its own, which is how `CONTRIBUTING.md` and the default `SECURITY.md`
+reach every repo. A tool that authenticates, reaches an external system or
+accepts network input carries its own `SECURITY.md`, because policies differ per
+tool in the lines that matter: what that binary can reach and what it stores.
+The default here covers the repos with nothing of that kind to describe.

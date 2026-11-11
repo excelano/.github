@@ -10,7 +10,7 @@ Please do not open public issues for security problems.
 
 ## Supported versions
 
-The latest release receives security fixes. Older releases are not supported. A repository with no releases is supported at its default branch.
+The latest release receives security fixes. Older versions are not supported. A repository with no releases is supported at its default branch.
 
 ## Scope
 

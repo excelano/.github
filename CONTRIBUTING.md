@@ -13,4 +13,4 @@ the person installing the release.
 
 `build`, `chore`, `ci`, `docs`, `refactor`, `style` and `test` mark everything
 else: tooling, dependencies, workflows, documentation, tests, and code that
-changes no behaviour. These stay out of the release notes.
+changes no behavior. These stay out of the release notes.
